@@ -746,7 +746,11 @@ class NHAOptimizer(pl.LightningModule):
             rendered_normals = self._render_normals(verts, K, RT, H, W, cameras=cameras, flame_meshes=flame_meshes,
                                                     rasterized_results=[fragments, screen_coords], )[:, :3]
 
-        # MLP TEXTURE SAMPLING
+        # LCX ： 查看张量所在的设备。是CPU还是在GPU?
+        print("LCX--1--------pixel_normal_encoding.device:", pixel_normal_encoding.device)
+        print("LCX--2--------mask.device:", mask.device)
+                         
+        # MLP TEXTURE SAMPLING              
         pixel_face_coords_masked = pixel_face_coords[mask]
         pixel_uv_coords_masked = pixel_uv_coords[mask]
         pixel_uv_ids_masked = pixel_uv_ids[mask]
