@@ -773,7 +773,7 @@ class NHAOptimizer(pl.LightningModule):
         pixel_expl_features_masked = pixel_expl_features_masked.to(self.device) ###LCX3
 
         static_mlp_conditions_masked = torch.cat((pixel_face_coords_masked, pixel_expl_features_masked), dim=-1)
-        n_masked = torch.arange(N, device=mask.device).view(N, 1, 1, 1).expand(N, H, W, faces_per_pix)[mask]
+        n_masked = torch.arange(N, device=mask.device).view(N, 1, 1, 1).expand(N, H, W, faces_per_pix)[mask] ###LCX4
         region_weights_masked = region_weights[mask]  # N' x 3
         frequencies_masked = torch.sum(frequencies[n_masked] * region_weights_masked.unsqueeze(-1), dim=1)
         phase_shifts_masked = torch.sum(phase_shifts[n_masked] * region_weights_masked.unsqueeze(-1), dim=1)
