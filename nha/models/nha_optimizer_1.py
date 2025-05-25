@@ -754,6 +754,7 @@ class NHAOptimizer(pl.LightningModule):
         ### LCX 解决方法：
         pixel_uv_ids_masked = pixel_uv_ids_masked.to(self.device)
         pixel_uv_coords_masked = pixel_uv_coords_masked.to(self.device)
+        
 
         if getattr(self, "n_upsample", 1) != 1:
             rendered_normals = torchvision.transforms.functional.resize(rendered_normals, (
