@@ -1,4 +1,6 @@
 ### LCX ,COLAB环境GPU受限环境用，由COPILOT编写代码。20250606。
+import sys
+sys.path.append("/content/neural-head-avatars/")
 
 from nha.util.log import get_logger
 from nha.data.real import RealDataset, CLASS_IDCS, frame2id, SEGMENTATION_LABELS
@@ -32,7 +34,8 @@ sys.path.append("deps")
 
 # include dependencies for face normal detection
 sys.path.append("deps/face_normals/resnet_unet")
-from face_normals.resnet_unet import ResNetUNet
+### from face_normals.resnet_unet import ResNetUNet  LCX:有错误，修改如下：
+from resnet_unet_model import ResNetUNet
 
 # remove that path and delete the resnet module entry
 # because face_parsing has a module with the same name
