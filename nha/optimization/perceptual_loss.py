@@ -58,7 +58,9 @@ class ResNet18(torch.nn.Module):
     def __init__(self, weight_path):
         super(ResNet18, self).__init__()
         net = get_model("r18")
-        net.load_state_dict(torch.load(weight_path))
+        # net.load_state_dict(torch.load(weight_path))
+        # LCX: 添加 map_location='cpu' 将模型权重加载到 CPU 上
+        net.load_state_dict(torch.load(weight_path, map_location=torch.device('cpu')))
         net.eval()
         self.conv1 = net.conv1
         self.bn1 = net.bn1
