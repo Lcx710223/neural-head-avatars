@@ -1793,8 +1793,8 @@ class NHAOptimizer(pl.LightningModule):
             self._visualize_head(vis_batch, max_samples=2, title=stage)
 
         return loss
-
-    def training_step(self, batch, batch_idx, optimizer_idx, *args, **kwargs):
+    ###LCX:删掉OPTMIZER_IDX。
+    def training_step(self, batch, batch_idx, *args, **kwargs):
         self.is_train = True
         self.fit_residuals = False
         self.prepare_batch(batch)
