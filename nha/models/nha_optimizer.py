@@ -1793,7 +1793,9 @@ class NHAOptimizer(pl.LightningModule):
             self._visualize_head(vis_batch, max_samples=2, title=stage)
 
         return loss
-    ###LCX:删掉OPTMIZER_IDX。
+    
+    ### def training_step(self, batch, batch_idx, optimizer_idx=None):
+    ### LCX:删掉OPTMIZER_IDX。在 PyTorch Lightning 2.x 版本，自动优化模式下不允许这样写，如果只有一个优化器，这个参数必须去掉。
     def training_step(self, batch, batch_idx, *args, **kwargs):
         self.is_train = True
         self.fit_residuals = False
