@@ -1660,9 +1660,15 @@ class NHAOptimizer(pl.LightningModule):
         :return: data batch dict
         """
 
-        batch["seg"] = digitize_segmap(batch["seg"])
-        batch["seg"] = batch["seg"].float()
-        batch["rgb"] = fill_tensor_background(batch["rgb"], batch["seg"])
+        # 仅当启用了分割功能时才处理分割图像：LCX20250611
+        if self.hparams.get("load_seg", False):
+            batch["seg"] = digitize_segmap(batch["seg"])
+            batch["seg"] = batch["seg"].float()
+            batch["rgb"] = fill_tensor_background(batch["rgb"], batch["seg"])
+        else:
+            # 当未启用分割功能时，创建一个全1的掩码:LCX20250611
+            N, C, H, W = batch["rgb"].shape
+            batch["seg"] = torch.ones((N, 1, H, W), dtype=torch.float32, device=batch["rgb"].device)
 
         if "lmk2d_iris" in batch:
             batch["lmk2d"] = torch.cat([batch["lmk2d"], batch["lmk2d_iris"]], dim=1)
