@@ -1,3 +1,5 @@
+###LCX 20250612 大修改，COPILOT编码。
+
 from nha.models.texture import MultiTexture
 from nha.models.flame import *
 from nha.models.offset_mlp import OffsetMLP
@@ -127,9 +129,39 @@ class NHAOptimizer(pl.LightningModule):
     def __init__(self, max_frame_id, w_lap, w_silh, w_semantic_hair, body_part_weights, **kwargs):
         super().__init__()
         self.save_hyperparameters()
+    
+        # 保持手动优化模式
         self.automatic_optimization = False
-
-        self.callbacks = [pl.callbacks.ModelCheckpoint(filename="{epoch:02d}", save_last=True)]
+    
+        # 初始化训练阶段
+        self._current_stage = "flame"
+    
+        # 初始化callbacks，调整日志记录频率
+        self.callbacks = [
+            pl.callbacks.ModelCheckpoint(
+                monitor="val_loss",
+                dirpath="checkpoints",
+                filename="nha-{epoch:02d}-{val_loss:.2f}",
+                save_top_k=3,
+                mode="min",
+            ),
+            pl.callbacks.EarlyStopping(
+                monitor="val_loss",
+                patience=3,
+                mode="min"
+            ),
+            pl.callbacks.LearningRateMonitor(logging_interval="epoch")  # 改为按epoch记录
+        ]
+    
+        # 添加训练器参数建议
+        self.trainer_kwargs = {
+            "log_every_n_steps": 1,  # 每个步骤都记录
+            "max_epochs": 100,
+            "accelerator": "auto",
+            "devices": 1,
+            "precision": "32-true",
+            "accumulate_grad_batches": 1,
+        }
 
         # flame model
         ignore_faces = np.load(FLAME_LOWER_NECK_FACES_PATH)  # ignore lower neck faces
@@ -243,79 +275,60 @@ class NHAOptimizer(pl.LightningModule):
         self.register_buffer("mouth_conditioning_min", torch.zeros(13) - 100)
         self.register_buffer("mouth_conditioning_max", torch.zeros(13) + 100)
 
-    def on_train_start(self) -> None:
+    def configure_callbacks(self):
+        return self.callbacks  
+    
+    
+    def on_train_start(self):
+        # 确保阶段被正确初始化
+        if not hasattr(self, '_current_stage'):
+            self._current_stage = "flame"
 
-        # Copying config and body part weights to checkpoint dir
-        logdir = Path(self.trainer.log_dir)
-        conf_path = logdir / "config.ini"
-        split_conf_path = logdir / "split_config.json"
-        body_part_weights_path = logdir / "body_part_weights.json"
 
-        if not conf_path.exists():
-            shutil.copy(self.hparams["config"], conf_path, follow_symlinks=True)
+    def set_stage(self, stage):
+        valid_stages = ["flame", "offset", "texture", "joint_flame", "off_resid", "all_resid"]
+        if stage not in valid_stages:
+            raise ValueError(f"Invalid stage {stage}. Must be one of {valid_stages}")
+        self._current_stage = stage
 
-        if not split_conf_path.exists():
-            shutil.copy(self.hparams["split_config"], split_conf_path, follow_symlinks=True)
-
-        if not body_part_weights_path.exists():
-            shutil.copy(self.hparams["body_part_weights"], body_part_weights_path, follow_symlinks=True)
-
-        # moves perceptual loss to own device
-        try:
-            self._perceptual_loss.to(self.device)
-        except AttributeError:
-            raise AttributeError("You have to download the backbone weights for the perceptual loss. Please refer"
-                                 "to the 'Installation' section of the README")
-
-        # hard setting lr
-        flame_optim, offset_optim, tex_optim, joint_flame_optim, off_resid_optim, all_resid_optim = self.optimizers()
-
-        lrs = self.get_current_lrs_n_lossweights()
-
-        flame_optim.param_groups[0]["lr"] = lrs["flame_lr"]
-        flame_optim.param_groups[1]["lr"] = lrs["trans_lr"]
-
-        for pg in offset_optim.param_groups:
-            pg["lr"] = lrs["offset_lr"]
-
-        joint_flame_optim.param_groups[0]["lr"] = lrs["flame_lr"]
-        joint_flame_optim.param_groups[1]["lr"] = lrs["trans_lr"]
-
-        for pg in tex_optim.param_groups:
-            pg["lr"] = lrs["tex_lr"]
-            pg["weight_decay"] = lrs["texture_weight_decay"]
-
-        off_resid_optim.param_groups[0]["lr"] = lrs["flame_lr"]
-        off_resid_optim.param_groups[1]["lr"] = lrs["trans_lr"]
-
-        all_resid_optim.param_groups[0]["lr"] = lrs["flame_lr"]
-        all_resid_optim.param_groups[1]["lr"] = lrs["trans_lr"]
+    @property
+    def current_stage(self):
+        if not hasattr(self, '_current_stage'):
+            self._current_stage = "flame"
+        return self._current_stage
+     
+    @current_stage.setter
+    def current_stage(self, value):
+        self.set_stage(value)
 
     def on_train_end(self) -> None:
         # determining dynamic condition extrema for validation
         self.get_dyn_cond_extrema(self.trainer.train_dataloader.dataset.datasets)
 
-    def _get_current_optimizer(self, epoch=None):
-        if epoch is None:
-            epoch = self.current_epoch
-
-        flame_optim, offset_optim, tex_optim, joint_flame_optim, off_resid_optim, all_resid_optim = self.optimizers()
-
-        if self.fit_residuals:
-            if epoch < self.hparams["epochs_offset"]:
-                optim = [off_resid_optim]
-            elif epoch < self.hparams["epochs_texture"] + self.hparams["epochs_offset"]:
-                optim = None
-            else:
-                optim = [all_resid_optim]
+    def _get_current_optimizer(self):
+        optimizers = self.optimizers()
+        flame_optim, offset_optim, tex_optim, joint_flame_optim, off_resid_optim, all_resid_optim = optimizers
+    
+        # 根据当前阶段返回相应的优化器
+        if not hasattr(self, '_current_stage'):
+            self._current_stage = "flame"
+        
+        if self._current_stage == "flame":
+            return flame_optim
+        elif self._current_stage == "offset":
+            return offset_optim
+        elif self._current_stage == "texture":
+            return tex_optim
+        elif self._current_stage == "joint_flame":
+            return joint_flame_optim
+        elif self._current_stage == "off_resid":
+            return off_resid_optim
+        elif self._current_stage == "all_resid":
+            return all_resid_optim
         else:
-            if epoch < self.hparams["epochs_offset"]:
-                optim = [flame_optim, offset_optim]
-            elif epoch < self.hparams["epochs_texture"] + self.hparams["epochs_offset"]:
-                optim = [tex_optim]
-            else:
-                optim = [joint_flame_optim, offset_optim, tex_optim]
-        return optim
+            return flame_optim  # 默认返回FLAME优化器
+
+
 
     def _predict_offsets(self, neck_rot):
         """
@@ -1695,42 +1708,9 @@ class NHAOptimizer(pl.LightningModule):
         trust = ele_trust * azi_trust
         batch["trust_semantics"] = trust.view(-1)
         return batch
-
-    def toggle_optimizer(self, optimizers):
-        """
-        Makes sure only the gradients of the current optimizer's parameters are calculated
-        in the training step to prevent dangling gradients in multiple-optimizer setup.
-
-        .. note:: Only called when using multiple optimizers
-
-        Override for your own behavior
-
-        It works with ``untoggle_optimizer`` to make sure param_requires_grad_state is properly reset.
-
-        Args:
-            optimizer: Current optimizer used in training_loop
-            optimizer_idx: Current optimizer idx in training_loop
-        """
-
-        # Iterate over all optimizer parameters to preserve their `requires_grad` information
-        # in case these are pre-defined during `configure_optimizers`
-        param_requires_grad_state = {}
-        for opt in self.optimizers(use_pl_optimizer=False):
-            for group in opt.param_groups:
-                for param in group["params"]:
-                    # If a param already appear in param_requires_grad_state, continue
-                    if param in param_requires_grad_state:
-                        continue
-                    param_requires_grad_state[param] = param.requires_grad
-                    param.requires_grad = False
-
-        # Then iterate over the current optimizer's parameters and set its `requires_grad`
-        # properties accordingly
-        for optimizer in optimizers:
-            for group in optimizer.param_groups:
-                for param in group["params"]:
-                    param.requires_grad = param_requires_grad_state[param]
-        self._param_requires_grad_state = param_requires_grad_state
+    ### LCX:在入口参数里，新增第3个：OPT-IDX=NONE
+    def toggle_optimizer(self, optimizer, opt_idx=None):
+        pass  # 使用空实现，因为我们不需要特殊的优化器切换逻辑
 
     def untoggle_optimizer(self):
         for param, requires_grad in self._param_requires_grad_state.items():
@@ -1740,73 +1720,48 @@ class NHAOptimizer(pl.LightningModule):
         self._param_requires_grad_state = dict()
 
     def step(self, batch, batch_idx, stage="train"):
-        if stage == "train" or self.fit_residuals:
-            optim = self._get_current_optimizer()
-
-            self.toggle_optimizer(optim)  # automatically toggle right requires_grads
-            # step 1: standard optimization of flame model and offsets
-            if self.current_epoch < self.hparams["epochs_offset"]:
-                loss, log_dict = self._optimize_offsets(batch)
-
-            # step 2: optimization texture
-            elif self.current_epoch < self.hparams["epochs_offset"] + self.hparams["epochs_texture"]:
-                loss, log_dict = self._optimize_texture(batch)
-
-            # step 3: optimization texture and shape
-            else:
-                loss, log_dict = self._optimize_jointly(batch)
-
-            # for opt in optim:
-            #     opt.zero_grad()
-
+        # 获取当前优化器
+        optim = self._get_current_optimizer()
+    
+        # 如果是训练阶段且是手动优化模式
+        if stage == "train" and not self.automatic_optimization:
+            # 清除梯度
+            optim.zero_grad()
+    
+        # 前向传播
+        outputs = self.forward(batch)
+    
+        # 计算损失
+        losses = self.compute_loss(outputs, batch)
+        loss = sum(losses.values())
+    
+        # 如果是训练阶段且是手动优化模式
+        if stage == "train" and not self.automatic_optimization:
+            # 反向传播
             self.manual_backward(loss)
-
-            for opt in optim:
-                opt.step()
-
-            for opt in optim:
-                opt.zero_grad(set_to_none=True)  # saving gpu memory
-
-            self.untoggle_optimizer()
-        else:
-            with torch.no_grad():
-                if self.current_epoch < self.hparams["epochs_offset"]:
-                    loss, log_dict = self._optimize_offsets(batch)
-                else:
-                    loss, log_dict = self._optimize_jointly(batch)
-
-        # give all keys in logdict val_ prefix
-        for key in list(log_dict.keys()):
-            val = log_dict.pop(key)
-            log_dict[f"{stage}_{key}"] = val
-
-        # log scores
-        log_dict["step"] = self.current_epoch
-        self.log_dict(log_dict, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
-
-        # log images
-        log_images = self.current_epoch % self.hparams["image_log_period"] == 0
-        if batch_idx == 0 and log_images:
-            try:
-                interesting_frames = [1455, 536] if stage == "train" else [826, 1399]
-                dataset = self.trainer.train_dataloader.dataset.datasets if stage == "train" else \
-                    self.trainer.val_dataloaders[0].dataset
-                interesting_samples = [dataset[dataset.frame_list.index(f)] for f in interesting_frames]
-            except ValueError:
-                interesting_samples = [dataset[i] for i in np.linspace(0, len(dataset), 4).astype(int)[1:3]]
-            vis_batch = dict_2_device(stack_dicts(*interesting_samples), self.device)
-            vis_batch = self.prepare_batch(vis_batch)
-            self._visualize_head(vis_batch, max_samples=2, title=stage)
-
-        return loss
+            # 优化器步进
+            optim.step()
+    
+        # 记录损失
+        for name, value in losses.items():
+            self.log(f"{stage}_{name}", value, on_step=True, on_epoch=True, prog_bar=True)
+    
+        return {
+            "loss": loss,
+            "outputs": outputs,
+            "losses": losses
+        }
     
     ### def training_step(self, batch, batch_idx, optimizer_idx=None):
     ### LCX:删掉OPTMIZER_IDX。在 PyTorch Lightning 2.x 版本，自动优化模式下不允许这样写，如果只有一个优化器，这个参数必须去掉。
-    def training_step(self, batch, batch_idx, *args, **kwargs):
+    def training_step(self, batch, batch_idx):
         self.is_train = True
         self.fit_residuals = False
         self.prepare_batch(batch)
+    
+        # 执行训练步骤
         ret = self.step(batch, batch_idx, stage="train")
+    
         self.is_train = False
         return ret
 
@@ -1958,59 +1913,48 @@ class NHAOptimizer(pl.LightningModule):
         )
 
     def configure_optimizers(self):
-
-        # FLAME
-        flame_params = [self._shape, self._expr, self._rotation, self._jaw_pose, self._neck_pose]
-
-        lrs = self.get_current_lrs_n_lossweights()
-
-        # translation gets smaller learning rate
-        params = [
-            {"params": flame_params},
-            {"params": [self._translation], "lr": lrs["trans_lr"]},
+         # 获取学习率
+        flame_lr = self.hparams.get("flame_lr", [1e-4])[0]
+        mlp_lr = self.hparams.get("mlp_lr", flame_lr)
+        texture_lr = self.hparams.get("texture_lr", flame_lr)
+        trans_lr = self._trans_lr[0] if hasattr(self, '_trans_lr') else flame_lr
+    
+        # 创建6个优化器
+        optimizers = [
+            torch.optim.Adam([  # FLAME优化器
+                {'params': self._shape, 'lr': flame_lr},
+                {'params': self._expr, 'lr': flame_lr},
+                {'params': self._neck_pose, 'lr': flame_lr},
+                {'params': self._jaw_pose, 'lr': flame_lr},
+                {'params': self._eyes_pose, 'lr': flame_lr},
+                {'params': self._translation, 'lr': trans_lr},
+                {'params': self._rotation, 'lr': flame_lr},
+            ]),
+            torch.optim.Adam([  # 偏移优化器
+                {'params': self._vert_feats, 'lr': mlp_lr},
+                {'params': self._offset_mlp.parameters(), 'lr': mlp_lr},
+            ]),
+            torch.optim.Adam([  # 纹理优化器
+                {'params': self._texture.parameters(), 'lr': texture_lr},
+                {'params': self._explFeatures.parameters(), 'lr': texture_lr},
+            ]),
+            torch.optim.Adam([  # 联合FLAME优化器
+                {'params': self._shape, 'lr': flame_lr},
+                {'params': self._expr, 'lr': flame_lr},
+                {'params': self._neck_pose, 'lr': flame_lr},
+                {'params': self._jaw_pose, 'lr': flame_lr},
+                {'params': self._eyes_pose, 'lr': flame_lr},
+                {'params': self._translation, 'lr': trans_lr},
+                {'params': self._rotation, 'lr': flame_lr},
+            ]),
+            torch.optim.Adam([  # 偏移残差优化器
+                {'params': self._vert_feats, 'lr': mlp_lr},
+            ]),
+            torch.optim.Adam([  # 所有残差优化器
+                {'params': self._vert_feats, 'lr': mlp_lr},
+                {'params': self._texture.parameters(), 'lr': texture_lr},
+                {'params': self._explFeatures.parameters(), 'lr': texture_lr},
+            ])
         ]
-        flame_optim = torch.optim.SGD(params, lr=lrs["flame_lr"])
-
-        # OFFSETS
-        params = [{"params": self._vert_feats}]
-        params.append({"params": self._offset_mlp.parameters()})
-        offset_optim = torch.optim.Adam(params, lr=lrs["offset_lr"])
-
-        # TEXTURE optimizer
-        params = [
-            {"params": list(self._texture.parameters()) + list(self._normal_encoder.parameters())},
-            {"params": self._explFeatures.parameters()},
-        ]
-        tex_optim = torch.optim.Adam(params, lr=lrs["tex_lr"], weight_decay=lrs["texture_weight_decay"])
-
-        # JOINT FLAME
-        joint_flame_params = flame_params + [self._eyes_pose]
-        # translation gets smaller lr
-        params = [
-            {"params": joint_flame_params},
-            {"params": [self._translation], "lr": lrs["trans_lr"]},
-        ]
-        joint_flame_optim = torch.optim.SGD(params, lr=lrs["flame_lr"])
-
-        # RESIDUALS optimizer
-        resid_params = [self._expr, self._rotation, self._jaw_pose, self._neck_pose]
-        params = [
-            {"params": resid_params},
-            {"params": [self._translation], "lr": lrs["trans_lr"]},
-        ]
-        offset_resid_optim = torch.optim.SGD(params, lr=lrs["flame_lr"])
-
-        params = [
-            {"params": resid_params + [self._eyes_pose]},
-            {"params": [self._translation], "lr": lrs["trans_lr"]},
-        ]
-        all_resid_optim = torch.optim.SGD(params, lr=lrs["flame_lr"])  # adds eye rotations
-
-        return [
-            {"optimizer": flame_optim},
-            {"optimizer": offset_optim},
-            {"optimizer": tex_optim},
-            {"optimizer": joint_flame_optim},
-            {"optimizer": offset_resid_optim},
-            {"optimizer": all_resid_optim},
-        ]
+    
+        return optimizers
