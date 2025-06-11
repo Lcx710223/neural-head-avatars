@@ -84,10 +84,8 @@ def train_pl_module(optimizer_module, data_module, args=None):
                                                     max_epochs=stage_jumps[i],
                                                     logger=experiment_logger)
 
-            # training
-            trainer.fit(model,
-                        train_dataloader=data.train_dataloader(batch_size=data._train_batch[i]),
-                        val_dataloaders=data.val_dataloader(batch_size=data._val_batch[i]))
+            # training LCX:20250611
+            trainer.fit(model,train_dataloaders=data.train_dataloader(batch_size=data._train_batch[i]),val_dataloaders=data.val_dataloader(batch_size=data._val_batch[i]))
 
             ckpt_path = Path(trainer.log_dir) / "checkpoints" / (stage + "_optim.ckpt")
             trainer.save_checkpoint(ckpt_path)
