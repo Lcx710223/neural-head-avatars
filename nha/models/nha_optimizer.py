@@ -1956,5 +1956,49 @@ class NHAOptimizer(pl.LightningModule):
                 {'params': self._explFeatures.parameters(), 'lr': texture_lr},
             ])
         ]
+
+        def compute_loss(self, outputs, batch):
+            """
+            计算损失函数。根据当前训练阶段选择合适的损失计算函数。
+    
+            Args:
+                outputs: forward方法的输出，包含预测结果
+                batch: 输入数据批次
+        
+            Returns:
+                dict: 包含各种损失值的字典
+            """
+            # 确保 current_stage 已经被正确初始化
+            if not hasattr(self, '_current_stage'):
+                self._current_stage = "flame"
+        
+            # 根据当前阶段选择合适的损失计算函数
+            if self._current_stage == "flame":
+                # FLAME优化
+                total_loss, log_dict = self._optimize_offsets(batch)
+            elif self._current_stage == "texture":
+                # 纹理优化
+                total_loss, log_dict = self._optimize_texture(batch)
+            elif self._current_stage == "joint_flame":
+                # 联合优化
+                total_loss, log_dict = self._optimize_jointly(batch)
+            elif self._current_stage == "offset":
+                # 偏移优化
+                total_loss, log_dict = self._optimize_offsets(batch)
+            elif self._current_stage == "off_resid":
+                # 偏移残差优化
+                total_loss, log_dict = self._optimize_offsets(batch)
+            elif self._current_stage == "all_resid":
+                # 所有残差优化
+                total_loss, log_dict = self._optimize_jointly(batch)
+            else:
+                # 默认使用偏移优化
+                total_loss, log_dict = self._optimize_offsets(batch)
+    
+            # 确保返回字典中包含total_loss
+            if 'total_loss' not in log_dict:
+                log_dict['total_loss'] = total_loss
+        
+            return log_dict
     
         return optimizers
