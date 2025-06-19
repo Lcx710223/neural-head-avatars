@@ -1803,63 +1803,63 @@ class NHAOptimizer(pl.LightningModule):
         self.logger.experiment.add_image(title + "prediction", log_img, self.current_epoch)
 
     def forward(self, batch, ignore_expr=False, ignore_pose=False, center_prediction=False, symmetric_rgb_range=True):
-            """
-            前向传播方法。
+        """
+        前向传播方法。
     
-            Args:
-                batch: 输入数据批次
-                ignore_expr: 是否忽略表情参数
-                ignore_pose: 是否忽略姿态参数
-                center_prediction: 是否居中预测
-                symmetric_rgb_range: 如果为True，RGB值范围为-1到1；否则为0到1
+        Args:
+            batch: 输入数据批次
+            ignore_expr: 是否忽略表情参数
+            ignore_pose: 是否忽略姿态参数
+            center_prediction: 是否居中预测
+            symmetric_rgb_range: 如果为True，RGB值范围为-1到1；否则为0到1
         
-            Returns:
-                dict: 包含所有必要输出的字典
-            """
-            # 创建FLAME参数
-            flame_params_offsets = self._create_flame_param_batch(batch, ignore_expr=ignore_expr, ignore_pose=ignore_pose)
+        Returns:
+            dict: 包含所有必要输出的字典
+        """
+        # 创建FLAME参数
+        flame_params_offsets = self._create_flame_param_batch(batch, ignore_expr=ignore_expr, ignore_pose=ignore_pose)
     
-            # 计算顶点、关键点和嘴部调节参数
-            offsets_verts, pred_lmks, mouth_conditioning = self._forward_flame( flame_params_offsets,  return_mouth_conditioning=True )
+        # 计算顶点、关键点和嘴部调节参数
+        offsets_verts, pred_lmks, mouth_conditioning = self._forward_flame( flame_params_offsets,  return_mouth_conditioning=True )
     
-            # 获取表情和姿态参数
-            expr = flame_params_offsets["expr"]
-            pose = torch.cat((
-                flame_params_offsets["rotation"],
-                flame_params_offsets["neck"],
-                flame_params_offsets["jaw"],
-                flame_params_offsets["eyes"]
-            ), dim=1)
+        # 获取表情和姿态参数
+        expr = flame_params_offsets["expr"]
+        pose = torch.cat((
+            flame_params_offsets["rotation"],
+            flame_params_offsets["neck"],
+            flame_params_offsets["jaw"],
+            flame_params_offsets["eyes"]
+        ), dim=1)
     
-            # 渲染RGBA预测
-            K = batch["cam_intrinsic"]
-            RT = batch["cam_extrinsic"]
-            H, W = batch["rgb"].shape[-2:]
+        # 渲染RGBA预测
+        K = batch["cam_intrinsic"]
+        RT = batch["cam_extrinsic"]
+        H, W = batch["rgb"].shape[-2:]
     
-            rgba_pred = self._render_rgba(
-                offsets_verts, K, RT, H, W,
-                expr=expr,
-                pose=pose,
-                mouth_cond=mouth_conditioning,
-                center_prediction=center_prediction
-            )
+        rgba_pred = self._render_rgba(
+            offsets_verts, K, RT, H, W,
+            expr=expr,
+            pose=pose,
+            mouth_cond=mouth_conditioning,
+            center_prediction=center_prediction
+        )
     
-            # 调整RGB值范围
-            if not symmetric_rgb_range:
-                rgba_pred[:, :3] = torch.clip(rgba_pred[:, :3] * 0.5 + 0.5, min=0.0, max=1.0)
+        # 调整RGB值范围
+        if not symmetric_rgb_range:
+            rgba_pred[:, :3] = torch.clip(rgba_pred[:, :3] * 0.5 + 0.5, min=0.0, max=1.0)
     
-            # 返回包含所有必要信息的输出字典
-            outputs = {
-                'rgba_pred': rgba_pred,
-                'vertices': offsets_verts,
-                'landmarks': pred_lmks,
-                'flame_params': flame_params_offsets,
-                'mouth_conditioning': mouth_conditioning,
-                'expr': expr,
-                'pose': pose
-            }
+        # 返回包含所有必要信息的输出字典
+        outputs = {
+            'rgba_pred': rgba_pred,
+            'vertices': offsets_verts,
+            'landmarks': pred_lmks,
+            'flame_params': flame_params_offsets,
+            'mouth_conditioning': mouth_conditioning,
+            'expr': expr,
+            'pose': pose
+        }
     
-            return outputs
+        return outputs
 
     @torch.no_grad()
     def predict_reenaction(self, batch, driving_model, base_target_params, base_driving_params, return_alpha=False):
