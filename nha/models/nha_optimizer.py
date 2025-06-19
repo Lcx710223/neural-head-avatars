@@ -1721,48 +1721,48 @@ class NHAOptimizer(pl.LightningModule):
         self._param_requires_grad_state = dict()
 
     def step(self, batch, batch_idx, stage="train"):
-            """
-            执行一个训练/验证步骤
+        """
+        执行一个训练/验证步骤
     
-            Args:
-                batch: 输入数据批次
-                batch_idx: 批次索引
-                stage: 阶段标识符 ("train" 或 "val")
+        Args:
+            batch: 输入数据批次
+            batch_idx: 批次索引
+            stage: 阶段标识符 ("train" 或 "val")
         
-            Returns:
-                dict: 包含损失、输出和其他必要信息的字典
-            """
-            # 获取当前优化器
-            optim = self._get_current_optimizer()
+        Returns:
+            dict: 包含损失、输出和其他必要信息的字典
+        """
+        # 获取当前优化器
+        optim = self._get_current_optimizer()
     
-            # 训练阶段且为手动优化模式时，清除梯度
-            if stage == "train" and not self.automatic_optimization:
-                optim.zero_grad()
+        # 训练阶段且为手动优化模式时，清除梯度
+        if stage == "train" and not self.automatic_optimization:
+            optim.zero_grad()
     
-            # 前向传播
-            outputs = self.forward(batch)
+        # 前向传播
+        outputs = self.forward(batch)
     
-            # 计算损失
-            losses = self.compute_loss(outputs, batch)
-            total_loss = losses.get('total_loss', sum(losses.values()))
+        # 计算损失
+        losses = self.compute_loss(outputs, batch)
+        total_loss = losses.get('total_loss', sum(losses.values()))
     
-            # 训练阶段且为手动优化模式时，执行反向传播和优化器步进
-            if stage == "train" and not self.automatic_optimization:
-                self.manual_backward(total_loss)
-                optim.step()
+        # 训练阶段且为手动优化模式时，执行反向传播和优化器步进
+        if stage == "train" and not self.automatic_optimization:
+            self.manual_backward(total_loss)
+            optim.step()
     
-            # 记录损失
-            for name, value in losses.items():
-                self.log(
-                    f"{stage}_{name}",
-                    value,
-                    on_step=True,
-                    on_epoch=True,
-                    prog_bar=True,
-                    sync_dist=True
-                )
+        # 记录损失
+        for name, value in losses.items():
+            self.log(
+                f"{stage}_{name}",
+                value,
+                on_step=True,
+                on_epoch=True,
+                prog_bar=True,
+                sync_dist=True
+            )
     
-            return {   "loss": total_loss,  "outputs": outputs, "losses": losses  }
+        return {   "loss": total_loss,  "outputs": outputs, "losses": losses  }
     
     ### def training_step(self, batch, batch_idx, optimizer_idx=None):
     ### LCX:删掉OPTMIZER_IDX。在 PyTorch Lightning 2.x 版本，自动优化模式下不允许这样写，如果只有一个优化器，这个参数必须去掉。
