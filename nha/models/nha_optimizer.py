@@ -2002,16 +2002,16 @@ class NHAOptimizer(pl.LightningModule):
         return optimizers
         
     def compute_loss(self, outputs, batch):
-    """
-    计算损失函数。根据当前训练阶段选择合适的损失计算函数。
+        """
+        计算损失函数。根据当前训练阶段选择合适的损失计算函数。
     
-    Args:
-        outputs: forward方法的输出，包含预测结果
-        batch: 输入数据批次
+        Args:
+            outputs: forward方法的输出，包含预测结果
+            batch: 输入数据批次
         
-    Returns:
-        dict: 包含各种损失值的字典
-    """
+        Returns:
+            dict: 包含各种损失值的字典
+        """
         # 确保 current_stage 已经被正确初始化
         if not hasattr(self, '_current_stage'):
             self._current_stage = "flame"
