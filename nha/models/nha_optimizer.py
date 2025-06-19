@@ -1956,7 +1956,7 @@ class NHAOptimizer(pl.LightningModule):
         )
 
     def configure_optimizers(self):
-         # 获取学习率
+        # 获取学习率
         flame_lr = self.hparams.get("flame_lr", [1e-4])[0]
         mlp_lr = self.hparams.get("mlp_lr", flame_lr)
         texture_lr = self.hparams.get("texture_lr", flame_lr)
@@ -1999,7 +1999,8 @@ class NHAOptimizer(pl.LightningModule):
                 {'params': self._explFeatures.parameters(), 'lr': texture_lr},
             ])
         ]
-
+        return optimizers
+        
     def compute_loss(self, outputs, batch):
     """
     计算损失函数。根据当前训练阶段选择合适的损失计算函数。
@@ -2043,5 +2044,3 @@ class NHAOptimizer(pl.LightningModule):
             log_dict['total_loss'] = total_loss
         
         return log_dict
-    
-    return optimizers
