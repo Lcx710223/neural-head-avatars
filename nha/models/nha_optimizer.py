@@ -1,6 +1,7 @@
 ###LCX 20250612 大修改，COPILOT编码。
 ###LCX 20250619 修改1：增加了 def compute_loss(self, outputs, batch)。修改2：forward（）。修改3：step()。本次修改见COPILOT-NHA-GPU-20250619A，主要解决GPU显存不足，降低算力要求之后。
-
+###LCX 20250621修改：回调checkpoints的存放路径，应该统一指定到LCX-ME01/checkpoints里去。
+import os
 from nha.models.texture import MultiTexture
 from nha.models.flame import *
 from nha.models.offset_mlp import OffsetMLP
@@ -142,7 +143,7 @@ class NHAOptimizer(pl.LightningModule):
         self.callbacks = [
             pl.callbacks.ModelCheckpoint(
                 monitor="val_total_loss_epoch",  # 这里同步为 val_total_loss_epoch
-                dirpath="checkpoints",
+                dirpath=os.path.join(self.hparams['default_root_dir'], "checkpoints"),  # 只用 root。LCX20250621
                 filename="nha-{epoch:02d}-{val_total_loss_epoch:.2f}",  # 文件名变量同步
                 save_top_k=3,
                 mode="min",
