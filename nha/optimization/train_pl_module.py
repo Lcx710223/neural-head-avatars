@@ -1,4 +1,5 @@
-import json
+### LCX 20250621 把CKPTS的路径统一到:default_root_dir/checkpoints/last.ckpt里面去。
+### default_root_dir，在ini文件里定义，目前我设置的是LCX-ME01。
 import time
 from collections import OrderedDict
 
@@ -39,7 +40,7 @@ def train_pl_module(optimizer_module, data_module, args=None):
     parser = ConfigArgumentParser(parents=[parser], add_help=False)
     parser.add_argument('--config', required=True, is_config_file=True)
     parser.add_argument("--checkpoint_file", type=str, required=False, default="",
-                        help="checkpoint to load model from")
+                        help="(Not used, always resume from default_root_dir/checkpoints/last.ckpt)")
 
     args = parser.parse_args() if args is None else parser.parse_args(args)
     args_dict = vars(args)
@@ -57,44 +58,58 @@ def train_pl_module(optimizer_module, data_module, args=None):
             print("Retry data loading after 2 minutes ... zZZZZ")
             time.sleep(2 * 60)
 
+    # 统一的 checkpoint 路径
+    args_dict['max_frame_id'] = data.max_frame_id
+    ckpt_path = os.path.join(args_dict["default_root_dir"], "checkpoints", "last.ckpt")
+
     # init optimizer
-    args_dict['max_frame_id'] = data.max_frame_id
-
-    ### 检查CKPTS文件，增加强壮性：LCX:20250621
-    args_dict['max_frame_id'] = data.max_frame_id
-    ckpt_file = args.checkpoint_file
-    if ckpt_file and os.path.isfile(ckpt_file):
-        model = optimizer_module.load_from_checkpoint(ckpt_file, strict=True, **args_dict)
+    if os.path.isfile(ckpt_path):
+        print(f"Resuming from checkpoint: {ckpt_path}")
+        model = optimizer_module.load_from_checkpoint(ckpt_path, strict=True, **args_dict)
     else:
-        if ckpt_file:
-            print(f"Warning: checkpoint file '{ckpt_file}' not found. Training from scratch.")
+        print(f"No checkpoint found at {ckpt_path}, training from scratch.")
         model = optimizer_module(**args_dict)
-    stages = ["offset", "texture", "joint"]
-    stage_jumps = [args_dict["epochs_offset"], args_dict["epochs_offset"] + args_dict["epochs_texture"],
-                   args_dict["epochs_offset"] + args_dict["epochs_texture"] + args_dict["epochs_joint"]]
 
-    experiment_logger = TensorBoardLogger(args_dict["default_root_dir"],
-                                          name="lightning_logs")
+    stages = ["offset", "texture", "joint"]
+    stage_jumps = [
+        args_dict["epochs_offset"],
+        args_dict["epochs_offset"] + args_dict["epochs_texture"],
+        args_dict["epochs_offset"] + args_dict["epochs_texture"] + args_dict["epochs_joint"]
+    ]
+
+    experiment_logger = TensorBoardLogger(args_dict["default_root_dir"], name="lightning_logs")
     log_dir = Path(experiment_logger.log_dir)
 
     for i, stage in enumerate(stages):
-        current_epoch = torch.load(args_dict["checkpoint_file"])["epoch"] if args_dict["checkpoint_file"] else 0
+        # 判断当前 checkpoint 是否存在并可读取 epoch
+        if os.path.isfile(ckpt_path):
+            try:
+                current_epoch = torch.load(ckpt_path)["epoch"]
+            except Exception as e:
+                print(f"Warning: failed to read current epoch from checkpoint: {e}")
+                current_epoch = 0
+        else:
+            current_epoch = 0
+
         if current_epoch < stage_jumps[i]:
             logger.info(f"Running the {stage}-optimization stage.")
 
-            ckpt_file = args_dict["checkpoint_file"] if args_dict["checkpoint_file"] else None
-            trainer = pl.Trainer.from_argparse_args(args, callbacks=model.callbacks,
-                                                    resume_from_checkpoint=ckpt_file,
-                                                    max_epochs=stage_jumps[i],
-                                                    logger=experiment_logger)
+            trainer = pl.Trainer.from_argparse_args(
+                args,
+                callbacks=model.callbacks,
+                resume_from_checkpoint=ckpt_path if os.path.isfile(ckpt_path) else None,
+                max_epochs=stage_jumps[i],
+                logger=experiment_logger
+            )
 
-            # training LCX:20250611
-            trainer.fit(model,train_dataloaders=data.train_dataloader(batch_size=data._train_batch[i]),val_dataloaders=data.val_dataloader(batch_size=data._val_batch[i]))
+            trainer.fit(
+                model,
+                train_dataloaders=data.train_dataloader(batch_size=data._train_batch[i]),
+                val_dataloaders=data.val_dataloader(batch_size=data._val_batch[i])
+            )
 
-            ckpt_path = Path(trainer.log_dir) / "checkpoints" / (stage + "_optim.ckpt")
+            # 每次都保存到同一个ckpt
             trainer.save_checkpoint(ckpt_path)
-            ckpt_path = Path(trainer.log_dir) / "checkpoints" / "last.ckpt"
-            args_dict["checkpoint_file"] = ckpt_path
 
     # visualizations and evaluations
     proc_id = int(os.environ.get("SLURM_PROCID", 0))
@@ -102,13 +117,15 @@ def train_pl_module(optimizer_module, data_module, args=None):
         model_name = log_dir.name
         logger.info("Producing Visualizations")
         vis_path = log_dir / "NovelViewSynthesisResults"
-        model = optimizer_module.load_from_checkpoint(args_dict["checkpoint_file"],
-                                                      strict=True, **args_dict).eval().cuda()
-        generate_novel_view_folder(model, data, angles=[[0, 0], [-30, 0], [-60, 0]],
-                                   outdir=vis_path, center_novel_views=True)
-        # os.system("module load FFmpeg")
-        os.system(
-            f"for split in train val; do for angle in 0_0 -30_0 -60_0; do ffmpeg -pattern_type glob -i {vis_path}/$split/$angle/'*.png' {vis_path}/{vis_path.parent.name}-$split-$angle.mp4;done;done")
+        if os.path.isfile(ckpt_path):
+            model = optimizer_module.load_from_checkpoint(ckpt_path, strict=True, **args_dict).eval().cuda()
+            generate_novel_view_folder(model, data, angles=[[0, 0], [-30, 0], [-60, 0]],
+                                    outdir=vis_path, center_novel_views=True)
+            os.system(
+                f"for split in train val; do for angle in 0_0 -30_0 -60_0; do ffmpeg -pattern_type glob -i {vis_path}/$split/$angle/'*.png' {vis_path}/{vis_path.parent.name}-$split-$angle.mp4;done;done"
+            )
+        else:
+            print(f"Warning: checkpoint file '{ckpt_path}' not found for evaluation/visualization.")
 
         # freeing up space
         try:
@@ -124,16 +141,19 @@ def train_pl_module(optimizer_module, data_module, args=None):
         bs = max(args_dict["validation_batch_size"])
         dataloader = DataLoader(data._val_set, batch_size=bs,
                                 num_workers=bs, shuffle=False)
-        model_dict = {model_name: args_dict["checkpoint_file"]}
+        model_dict = {model_name: ckpt_path}
         model_dict = OrderedDict(model_dict)
         eval_path = log_dir / f"QuantitativeEvaluation-{model_name}.json"
 
-        eval_dict = evaluate_models(models=model_dict, dataloader=dataloader)
-        with open(eval_path, "w") as f:
-            json.dump(eval_dict, f)
+        if os.path.isfile(ckpt_path):
+            eval_dict = evaluate_models(models=model_dict, dataloader=dataloader)
+            with open(eval_path, "w") as f:
+                json.dump(eval_dict, f)
 
-        # scene reconstruction
-        reconstruct_sequence(model_dict, dataset=data._val_set, batch_size=bs,
-                             savepath=str(log_dir / f"SceneReconstruction{model_name}-val.mp4"))
-        reconstruct_sequence(model_dict, dataset=data._train_set, batch_size=bs,
-                             savepath=str(log_dir / f"SceneReconstruction-{model_name}-train.mp4"))
+            # scene reconstruction
+            reconstruct_sequence(model_dict, dataset=data._val_set, batch_size=bs,
+                                savepath=str(log_dir / f"SceneReconstruction{model_name}-val.mp4"))
+            reconstruct_sequence(model_dict, dataset=data._train_set, batch_size=bs,
+                                savepath=str(log_dir / f"SceneReconstruction-{model_name}-train.mp4"))
+        else:
+            print(f"Warning: checkpoint file '{ckpt_path}' not found. Evaluation and reconstruction skipped.")
