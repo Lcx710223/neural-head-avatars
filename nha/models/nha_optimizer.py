@@ -155,6 +155,7 @@ class NHAOptimizer(pl.LightningModule):
             ),
             pl.callbacks.LearningRateMonitor(logging_interval="epoch")
         ]
+        # LCX 20250621:上面修改，可使所有模型都只会保存到LCX-ME01/checkpoints/last.ckpt
         # LCX 修改结束 ===
     
         # 添加训练器参数建议
