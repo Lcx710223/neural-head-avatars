@@ -60,11 +60,15 @@ def train_pl_module(optimizer_module, data_module, args=None):
     # init optimizer
     args_dict['max_frame_id'] = data.max_frame_id
 
-    if args.checkpoint_file:
-        model = optimizer_module.load_from_checkpoint(args.checkpoint_file, strict=True, **args_dict)
+    ### 检查CKPTS文件，增加强壮性：LCX:20250621
+    args_dict['max_frame_id'] = data.max_frame_id
+    ckpt_file = args.checkpoint_file
+    if ckpt_file and os.path.isfile(ckpt_file):
+        model = optimizer_module.load_from_checkpoint(ckpt_file, strict=True, **args_dict)
     else:
+        if ckpt_file:
+            print(f"Warning: checkpoint file '{ckpt_file}' not found. Training from scratch.")
         model = optimizer_module(**args_dict)
-
     stages = ["offset", "texture", "joint"]
     stage_jumps = [args_dict["epochs_offset"], args_dict["epochs_offset"] + args_dict["epochs_texture"],
                    args_dict["epochs_offset"] + args_dict["epochs_texture"] + args_dict["epochs_joint"]]
