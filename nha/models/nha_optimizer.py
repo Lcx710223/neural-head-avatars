@@ -149,7 +149,7 @@ class NHAOptimizer(pl.LightningModule):
                 mode="min",
             ),
             pl.callbacks.EarlyStopping(
-                monitor="val_total_loss_epoch",  # 这里同步为 val_total_loss_epoch
+                monitor="val_total_loss_epoch",  # 这里同步为 val_total_loss_epoch。LCX20250621。
                 patience=3,
                 mode="min"
             ),
