@@ -138,21 +138,23 @@ class NHAOptimizer(pl.LightningModule):
         self._current_stage = "flame"
     
         # 初始化callbacks，调整日志记录频率
+        # LCX: 修改开始：同步 ModelCheckpoint 与 EarlyStopping 的 monitor 字段 ===
         self.callbacks = [
             pl.callbacks.ModelCheckpoint(
-                monitor="val_loss",
+                monitor="val_total_loss_epoch",  # 这里同步为 val_total_loss_epoch
                 dirpath="checkpoints",
-                filename="nha-{epoch:02d}-{val_loss:.2f}",
+                filename="nha-{epoch:02d}-{val_total_loss_epoch:.2f}",  # 文件名变量同步
                 save_top_k=3,
                 mode="min",
             ),
             pl.callbacks.EarlyStopping(
-                monitor="val_loss",
+                monitor="val_total_loss_epoch",  # 这里同步为 val_total_loss_epoch
                 patience=3,
                 mode="min"
             ),
-            pl.callbacks.LearningRateMonitor(logging_interval="epoch")  # 改为按epoch记录
+            pl.callbacks.LearningRateMonitor(logging_interval="epoch")
         ]
+        # LCX 修改结束 ===
     
         # 添加训练器参数建议
         self.trainer_kwargs = {
