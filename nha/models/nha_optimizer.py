@@ -144,8 +144,8 @@ class NHAOptimizer(pl.LightningModule):
             pl.callbacks.ModelCheckpoint(
                 monitor="val_total_loss_epoch",  # 这里同步为 val_total_loss_epoch
                 dirpath=os.path.join(self.hparams['default_root_dir'], "checkpoints"),  # 只用 root。LCX20250621
-                filename="nha-{epoch:02d}-{val_total_loss_epoch:.2f}",  # 文件名变量同步
-                save_top_k=3,
+                filename="last",  # 统一保存为 last.ckpt。LCX20250621
+                save_top_k=1,
                 mode="min",
             ),
             pl.callbacks.EarlyStopping(
