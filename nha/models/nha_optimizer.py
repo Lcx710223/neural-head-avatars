@@ -1,6 +1,6 @@
 ###LCX 20250612 大修改，COPILOT编码。
 ###LCX 20250619 修改1：增加了 def compute_loss(self, outputs, batch)。修改2：forward（）。修改3：step()。本次修改见COPILOT-NHA-GPU-20250619A，主要解决GPU显存不足，降低算力要求之后。
-###LCX 20250621修改：回调checkpoints的存放路径，应该统一指定到LCX-ME01/checkpoints里去。
+###LCX 20250621 修改：回调checkpoints的存放路径，应该统一指定到LCX-ME01/checkpoints里去。
 import os
 from nha.models.texture import MultiTexture
 from nha.models.flame import *
