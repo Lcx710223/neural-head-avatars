@@ -1,5 +1,4 @@
-### LCX 20250621 把CKPTS的路径统一到:default_root_dir/checkpoints/last.ckpt里面去。
-### default_root_dir，在ini文件里定义，目前我设置的是LCX-ME01。
+### LCX 20250621 大修改。把CKPTS的路径统一到:default_root_dir/checkpoints/last.ckpt里面去。default_root_dir，在ini文件里定义，目前我设置的是LCX-ME01。
 ### 保存、resume、评估都用LCX-ME01/checkpoints/last.ckpt。不再用Lightning自动拼出的version_x/checkpoints路径。只需保证dirpath和resume_from_checkpoint一致，且都用绝对路径或同一相对路径。
 
 import time
