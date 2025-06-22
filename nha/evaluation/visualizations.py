@@ -1,3 +1,7 @@
+### LCX修改20250622
+### 错误关键行来自 visualizations.py 的 generate_novel_view_folder：Image.open(img).save(f_outpath)  FileNotFoundError: [Errno 2] No such file or directory: 'rgba_pred'
+### 这说明 img 被赋值了字符串 'rgba_pred'，而不是 tensor 或文件路径。
+
 from nha.data.real import digitize_segmap
 from itertools import product
 import sys
