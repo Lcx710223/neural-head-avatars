@@ -154,6 +154,9 @@ def evaluate_models(
 
             # get prediction
             pred_rgba = model.forward(batch)
+            ###LCX20250622加入语句：
+            if isinstance(pred_rgba, dict):
+                pred_rgba = pred_rgba["rgba_pred"]
             pred_rgb, pred_mask = pred_rgba[:, :3], pred_rgba[:, 3:]
 
             # get gt
