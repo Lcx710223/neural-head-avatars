@@ -15,6 +15,7 @@ import torch
 import numpy as np
 from torchvision.transforms import ToPILImage
 from tqdm import tqdm
+from PIL import Image  # 新增LCX20250622
 
 topil = ToPILImage()
 
@@ -59,6 +60,8 @@ def reconstruct_sequence(models,
         for batch in tqdm(iterable=dataloader):
             batch = dict_2_device(batch, "cuda")
             rgba_pred = m.forward(dict_2_device(batch, "cuda"), symmetric_rgb_range=False)
+            if isinstance(rgba_pred, dict):
+                rgba_pred = rgba_pred["rgba_pred"]
             pred_rgb.append(rgba_pred[:,:3].cpu())
             pred_seg.append(rgba_pred[:,3:].cpu())
             pred_geom.append(m.predict_shaded_mesh(dict_2_device(batch, "cuda")).cpu()[:,:3])
@@ -184,11 +187,22 @@ def generate_novel_view_folder(model: NHAOptimizer,
                         rots.append(rot)
                     batch["flame_pose"][:, :3] = torch.tensor(np.stack(rots), device=model.device)
                     center_pred = center_novel_views and (az != 0 or el != 0)  # front view is never recentered
-                    pred_imgs = model.forward(batch, center_prediction=center_pred, symmetric_rgb_range=False)
+
+                    outputs = model.forward(batch, center_prediction=center_pred, symmetric_rgb_range=False)
+                    pred_imgs = outputs["rgba_pred"]
 
                     for img, frame in zip(pred_imgs, batch["frame"]):
                         f_outpath = angledir / f"{frame.item():04d}.png"
-                        topil(img.detach().cpu()).save(f_outpath)
+                        if isinstance(img, torch.Tensor):
+                            topil(img.detach().cpu()).save(f_outpath)
+                        elif isinstance(img, str):
+                            if os.path.isfile(img):
+                                Image.open(img).save(f_outpath)
+                            else:
+                                print(f"Warning: img is a string but not a file: {img}, skip.")
+                                continue
+                        else:
+                            raise TypeError(f"Unexpected image type: {type(img)}, value: {img}")
 
             # saving gt data
             if gt_outdir is not None:
@@ -196,4 +210,13 @@ def generate_novel_view_folder(model: NHAOptimizer,
 
                 for img, frame in zip(gt_imgs, batch["frame"]):
                     f_outpath = gt_angledir / f"{frame.item():04d}.png"
-                    topil(img.detach().cpu()).save(f_outpath)
+                    if isinstance(img, torch.Tensor):
+                        topil(img.detach().cpu()).save(f_outpath)
+                    elif isinstance(img, str):
+                        if os.path.isfile(img):
+                            Image.open(img).save(f_outpath)
+                        else:
+                            print(f"Warning: img is a string but not a file: {img}, skip.")
+                            continue
+                    else:
+                        raise TypeError(f"Unexpected image type: {type(img)}, value: {img}")
