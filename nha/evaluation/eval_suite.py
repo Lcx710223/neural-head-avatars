@@ -1,3 +1,5 @@
+###LCX20250622 修改了原157行。问题：原模型现在 forward 返回 dict，不是 tensor。
+
 from nha.evaluation import metrics as nha_metrics
 import torch.nn as nn
 import nha.models
