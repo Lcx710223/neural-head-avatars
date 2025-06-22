@@ -1,3 +1,4 @@
+### LCX20250622，77行。修改 _2D 为 TWO_D :20250622
 from pytorch_msssim import ms_ssim
 import numpy as np
 import torch
