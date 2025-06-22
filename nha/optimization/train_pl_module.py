@@ -1,6 +1,6 @@
 ### LCX 20250621 大修改。把CKPTS的路径统一到:default_root_dir/checkpoints/last.ckpt里面去。default_root_dir，在ini文件里定义，目前我设置的是LCX-ME01。
 ### 保存、resume、评估都用LCX-ME01/checkpoints/last.ckpt。不再用Lightning自动拼出的version_x/checkpoints路径。只需保证dirpath和resume_from_checkpoint一致，且都用绝对路径或同一相对路径。
-
+### LCX20250622修改了反序列化的代码，主要是加载CKPTS时的信任与安全问题。
 import time
 from collections import OrderedDict
 
@@ -13,11 +13,15 @@ import os
 import pytorch_lightning as pl
 from pathlib import Path
 import torch
+import pathlib  ### LCX:新增
 from argparse import ArgumentParser
 from pytorch_lightning.loggers import TensorBoardLogger
 from configargparse import ArgumentParser as ConfigArgumentParser
 
 from nha.evaluation.visualizations import generate_novel_view_folder, reconstruct_sequence
+
+# 允许 PosixPath 反序列化。LCX:20250622
+torch.serialization.add_safe_globals([pathlib.PosixPath])
 
 logger = get_logger(__name__)
 
