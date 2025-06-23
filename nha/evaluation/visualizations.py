@@ -1,6 +1,7 @@
 ### LCX修改20250622 V4
 ### 错误关键行来自 visualizations.py 的 generate_novel_view_folder：Image.open(img).save(f_outpath)  FileNotFoundError: [Errno 2] No such file or directory: 'rgba_pred'
 ### 这说明 img 被赋值了字符串 'rgba_pred'，而不是 tensor 或文件路径。
+### LCX20250623 57-63行。
 
 from nha.data.real import digitize_segmap
 from itertools import product
@@ -52,9 +53,15 @@ def reconstruct_sequence(models,
     img_dict = dict()
     for m_name, m_ckpt in models.items():
         logger.info(f"Start Inference for model {m_name}")
-        hparams_file = Path(m_ckpt).parents[1] / "hparams.yaml"
-        m = NHAOptimizer.load_from_checkpoint(m_ckpt,
-                                              hparams_file=str(hparams_file)).cuda()
+        # hparams_file = Path(m_ckpt).parents[1] / "hparams.yaml"
+        # m = NHAOptimizer.load_from_checkpoint(m_ckpt, hparams_file=str(hparams_file)).cuda()
+        # === 替换为方案一 ===
+        ckpt_data = torch.load(m_ckpt, map_location='cpu')
+        hparams = ckpt_data['hyper_parameters']
+        needed_keys = ['max_frame_id', 'w_lap', 'w_silh', 'w_semantic_hair', 'body_part_weights']
+        model_kwargs = {k: hparams[k] for k in needed_keys}
+        m = NHAOptimizer.load_from_checkpoint(m_ckpt, **model_kwargs).cuda()
+        # ==================
 
         m.eval()
 
