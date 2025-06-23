@@ -1,7 +1,7 @@
 ### LCX修改20250622 V4
 ### 错误关键行来自 visualizations.py 的 generate_novel_view_folder：Image.open(img).save(f_outpath)  FileNotFoundError: [Errno 2] No such file or directory: 'rgba_pred'
 ### 这说明 img 被赋值了字符串 'rgba_pred'，而不是 tensor 或文件路径。
-### LCX20250623 57-63行。
+### LCX20250623 58-64行。原文是从YAML调取5个参数，但是与保存的CKPTS里的数据不能对应。现在修改为直接从CKPTS里直接读取5个超参数。
 
 from nha.data.real import digitize_segmap
 from itertools import product
