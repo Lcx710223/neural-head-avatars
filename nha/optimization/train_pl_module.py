@@ -1,7 +1,7 @@
 ### LCX 20250621 大修改。把CKPTS的路径统一到:default_root_dir/checkpoints/last.ckpt里面去。default_root_dir，在ini文件里定义，目前我设置的是LCX-ME01。
-### 保存、resume、评估都用LCX-ME01/checkpoints/last.ckpt。不再用Lightning自动拼出的version_x/checkpoints路径。只需保证dirpath和resume_from_checkpoint一致，且都用绝对路径或同一相对路径。
+### 保存、resume、评估都用LCX-ME01/checkpoints/last.ckpt。不再用Lightning自动拼出的version_x/checkpoints路径。只需保证dirpath和resume_from_checkpoint一致，且都用绝对路径。
 ### LCX20250622修改了反序列化的代码，主要是加载CKPTS时的信任与安全问题。LCX20250623IMPORT JSON。
-### LCX20250623修改了：import json
+### LCX20250623修改了：import json ###LCX20250630修改107行，切换训练场景。
 
 import time
 from collections import OrderedDict
@@ -84,6 +84,9 @@ def train_pl_module(optimizer_module, data_module, args=None):
         args_dict["epochs_offset"] + args_dict["epochs_texture"] + args_dict["epochs_joint"]
     ]
 
+    # 对应每个stage，指定NHAOptimizer的stage名称（重要！）
+    stage_names = ["flame", "texture", "joint_flame"]
+
     experiment_logger = TensorBoardLogger(args_dict["default_root_dir"], name="lightning_logs")
     log_dir = Path(experiment_logger.log_dir)
 
@@ -100,6 +103,11 @@ def train_pl_module(optimizer_module, data_module, args=None):
 
         if current_epoch < stage_jumps[i]:
             logger.info(f"Running the {stage}-optimization stage.")
+
+            # 关键：明确切换NHAOptimizer的current_stage ###LCX20250630修改训练场景的切换。
+            if hasattr(model, "set_stage"):
+                model.set_stage(stage_names[i])
+                logger.info(f"Set model.current_stage to {stage_names[i]}.")
 
             trainer = pl.Trainer.from_argparse_args(
                 args,
