@@ -1160,43 +1160,48 @@ class NHAOptimizer(pl.LightningModule):
 
     ###LCX20250701修改RGB-LOSS计算函数:
     def _compute_rgb_losses(self, batch, verts, expr, pose, mouth_conditioning, rasterized_results=None, rendered_normals=None):
-    rgb_gt = batch["rgb"]
-    mask = batch["seg"].detach()
+        """
+        Computes photometric and perceptual loss
+        :returns dict("rgb_loss"=scalar_rgb_loss_tensor, "perc_loss"=scalar_perc_loss_tensor)
+        """
 
-    K = batch["cam_intrinsic"]
-    RT = batch["cam_extrinsic"]
-    H, W = rgb_gt.shape[-2:]
+        rgb_gt = batch["rgb"]
+        mask = batch["seg"].detach()
 
-    rgba_pred, raster_dict = self._render_rgba(verts, K, RT, H, W, expr=expr, pose=pose,
+        K = batch["cam_intrinsic"]
+        RT = batch["cam_extrinsic"]
+        H, W = rgb_gt.shape[-2:]
+
+        rgba_pred, raster_dict = self._render_rgba(verts, K, RT, H, W, expr=expr, pose=pose,
                                                mouth_cond=mouth_conditioning, rendered_normals=rendered_normals,
                                                return_rasterizer_results=True,
                                                rasterized_results=rasterized_results)
 
-    predicted_images = rgba_pred[:, :3]
-    predicted_seg = rgba_pred[:, [3]].detach()
+        predicted_images = rgba_pred[:, :3]
+        predicted_seg = rgba_pred[:, [3]].detach()
 
-    screen_coords = raster_dict["screen_coords"] * (-1)
+        screen_coords = raster_dict["screen_coords"] * (-1)
 
-    from nha.util.screen_grad import screen_grad
-    from nha.util.general import softmask_gradient, erode_mask
-    screen_colors = screen_grad(batch["rgb"], screen_coords)
+        from nha.util.screen_grad import screen_grad
+        from nha.util.general import softmask_gradient, erode_mask
+        screen_colors = screen_grad(batch["rgb"], screen_coords)
 
-    # use intersection mask
-    mask = predicted_seg * mask
-    rgb_loss = self._masked_L1(predicted_images, screen_colors, mask)
+        # use intersection mask
+        mask = predicted_seg * mask
+        rgb_loss = self._masked_L1(predicted_images, screen_colors, mask)
 
-    # ATTENTION: perceptual loss only provides gradient to texture!
-    # don't apply gradient to boundary of silhouette -> artifacts occur otherwise
-    gradient_margin = int(max(H, W) / 50)
-    predicted_images = softmask_gradient(predicted_images, erode_mask(predicted_seg, gradient_margin))
+        # ATTENTION: perceptual loss only provides gradient to texture!
+        # don't apply gradient to boundary of silhouette -> artifacts occur otherwise
+        gradient_margin = int(max(H, W) / 50)
+        predicted_images = softmask_gradient(predicted_images, erode_mask(predicted_seg, gradient_margin))
 
-    if self._perceptual_loss is not None:
-        perc_loss = self._perceptual_loss(predicted_images, screen_colors.detach()).mean() if \
-            self.get_current_lrs_n_lossweights()["w_perc"] >= 0 else 0.0
-    else:
-        perc_loss = 0.0
+        if self._perceptual_loss is not None:
+            perc_loss = self._perceptual_loss(predicted_images, screen_colors.detach()).mean() if \
+                self.get_current_lrs_n_lossweights()["w_perc"] >= 0 else 0.0
+        else:
+            perc_loss = 0.0
 
-    return dict(rgb_loss=rgb_loss, perc_loss=perc_loss)
+        return dict(rgb_loss=rgb_loss, perc_loss=perc_loss)
 
     def _compute_lmk_loss(self, batch, pred_lmks):
         lmks = batch["lmk2d"].clone()
