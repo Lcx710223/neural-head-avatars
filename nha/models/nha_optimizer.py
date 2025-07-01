@@ -249,7 +249,8 @@ class NHAOptimizer(pl.LightningModule):
         self._leaky_hinge = LeakyHingeLoss(0.0, 1.0, 0.3)
         self._masked_L1 = MaskedCriterion(torch.nn.L1Loss(reduction="none"))
 
-        if Path("assets/InsightFace/backbone.pth").exists():
+        ###LCX20250701把路径修改为COLAB里的绝对路径：
+        if Path("/content/neural-head-avatars/assets/InsightFace/backbone.pth").exists():
             self._perceptual_loss = NoSubmoduleWrapper(ResNetLOSS())  # don't store perc_loss weights as model weights
         else:
             self._perceptual_loss = None
