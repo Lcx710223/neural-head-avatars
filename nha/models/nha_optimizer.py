@@ -139,28 +139,23 @@ class NHAOptimizer(pl.LightningModule):
         self._current_stage = "flame"
     
         # 初始化callbacks，调整日志记录频率
-        # LCX: 修改开始：同步 ModelCheckpoint 与 EarlyStopping 的 monitor 字段 ===
         self.callbacks = [
             pl.callbacks.ModelCheckpoint(
-                monitor="val_total_loss_epoch",  # 这里同步为 val_total_loss_epoch
-                dirpath=os.path.join(self.hparams['default_root_dir'], "checkpoints"),  # 只用 root。LCX20250621
-                filename="last",  # 统一保存为 last.ckpt。LCX20250621
+                monitor="val_total_loss_epoch",
+                dirpath=os.path.join(self.hparams['default_root_dir'], "checkpoints"),
+                filename="last",
                 save_top_k=1,
                 mode="min",
             ),
             pl.callbacks.EarlyStopping(
-                monitor="val_total_loss_epoch",  # 这里同步为 val_total_loss_epoch。LCX20250621。
+                monitor="val_total_loss_epoch",
                 patience=3,
                 mode="min"
             ),
             pl.callbacks.LearningRateMonitor(logging_interval="epoch")
         ]
-        # LCX 20250621:上面修改，可使所有模型都只会保存到LCX-ME01/checkpoints/last.ckpt
-        # LCX 修改结束 ===
-    
-        # 添加训练器参数建议
         self.trainer_kwargs = {
-            "log_every_n_steps": 1,  # 每个步骤都记录
+            "log_every_n_steps": 1,
             "max_epochs": 100,
             "accelerator": "auto",
             "devices": 1,
@@ -169,7 +164,7 @@ class NHAOptimizer(pl.LightningModule):
         }
 
         # flame model
-        ignore_faces = np.load(FLAME_LOWER_NECK_FACES_PATH)  # ignore lower neck faces
+        ignore_faces = np.load(FLAME_LOWER_NECK_FACES_PATH)
         upsample_regions = dict(all=self.hparams["subdivide_mesh"])
 
         self._flame = FlameHead(
@@ -258,6 +253,11 @@ class NHAOptimizer(pl.LightningModule):
             self._perceptual_loss = NoSubmoduleWrapper(ResNetLOSS())  # don't store perc_loss weights as model weights
         else:
             self._perceptual_loss = None
+
+        # ====== 修正部分：将感知损失网络迁移到 self.device (cuda/cpu) ======
+        if self._perceptual_loss is not None:
+            self._perceptual_loss = self._perceptual_loss.to(self.device)
+        # ====== END 修正 ======
 
         # training stage
         self.fit_residuals = False
