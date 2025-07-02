@@ -1,6 +1,6 @@
 ###LCX 20250612 大修改，COPILOT编码。
 ###LCX 20250619 修改1：增加了 def compute_loss(self, outputs, batch)。修改2：forward（）。修改3：step()。本次修改见COPILOT-NHA-GPU-20250619A，主要解决GPU显存不足，降低算力要求之后。
-###LCX 20250621 修改：回调checkpoints的存放路径，应该统一指定到LCX-ME01/checkpoints里去。
+###LCX 20250621 修改：回调checkpoints的存放路径，应该统一指定到LCX-ME01/checkpoints里去。LCX20250702DENUG:怀疑RESNET感知模型没有被调用。
 import os
 from nha.models.texture import MultiTexture
 from nha.models.flame import *
@@ -1192,6 +1192,14 @@ class NHAOptimizer(pl.LightningModule):
         rgb_loss = self._masked_L1(predicted_images, screen_colors, mask)
 
         ###LCX20250702DEBUGS:检查为什么感知LOSS为零。
+        if self._perceptual_loss is not None:
+            print("[NHADEBUG] About to call self._perceptual_loss!")
+            perc_loss = self._perceptual_loss(predicted_images, screen_colors.detach())
+            print("[NHADEBUG] self._perceptual_loss output:", perc_loss)
+            perc_loss = perc_loss.mean() if self.get_current_lrs_n_lossweights()["w_perc"] >= 0 else 0.0
+        else:
+            print("[NHADEBUG] self._perceptual_loss is None!")
+            perc_loss = 0.0
         # DEBUG: 打印关键张量的统计
         print(f"[DEBUG] predicted_images: min={predicted_images.min().item()}, max={predicted_images.max().item()}, mean={predicted_images.mean().item()}")
         print(f"[DEBUG] screen_colors: min={screen_colors.min().item()}, max={screen_colors.max().item()}, mean={screen_colors.mean().item()}")
