@@ -1,6 +1,6 @@
 ###LCX 20250612 大修改，COPILOT编码。
 ###LCX 20250619 修改1：增加了 def compute_loss(self, outputs, batch)。修改2：forward（）。修改3：step()。本次修改见COPILOT-NHA-GPU-20250619A，主要解决GPU显存不足，降低算力要求之后。
-###LCX 20250621 修改：回调checkpoints的存放路径，应该统一指定到LCX-ME01/checkpoints里去。LCX20250702DENUG:怀疑RESNET感知模型没有被调用。
+###LCX 20250621 修改：回调checkpoints的存放路径，应该统一指定到LCX-ME01/checkpoints里去。LCX20250702DENUG:怀疑RESNET感知模型没有被调用。LCX20250702修改为无条件加载perceptualloss。
 import os
 from nha.models.texture import MultiTexture
 from nha.models.flame import *
@@ -250,9 +250,12 @@ class NHAOptimizer(pl.LightningModule):
         self._masked_L1 = MaskedCriterion(torch.nn.L1Loss(reduction="none"))
 
         ###LCX20250701把路径修改为COLAB里的绝对路径：
-        if Path("/content/neural-head-avatars/assets/InsightFace/backbone.pth").exists():
-            self._perceptual_loss = NoSubmoduleWrapper(ResNetLOSS())  # don't store perc_loss weights as model weights
-        else:
+        ###LCX20250702修改为无条件加载【perceptual loss】：
+        try:
+            self._perceptual_loss = NoSubmoduleWrapper(ResNetLOSS())
+            print("[LCX-DEBUG] perceptual loss loaded successfully!")
+        except Exception as e:
+            print("[LCX-DEBUG] Failed to load perceptual loss network:", e)
             self._perceptual_loss = None
 
         # ====== 修正部分：将感知损失网络迁移到 self.device (cuda/cpu) ======
