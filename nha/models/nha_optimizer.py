@@ -1,6 +1,7 @@
 ###LCX 20250612 大修改，COPILOT编码。
 ###LCX 20250619 修改1：增加了 def compute_loss(self, outputs, batch)。修改2：forward（）。修改3：step()。本次修改见COPILOT-NHA-GPU-20250619A，主要解决GPU显存不足，降低算力要求之后。
 ###LCX 20250621 修改：回调checkpoints的存放路径，应该统一指定到LCX-ME01/checkpoints里去。LCX20250702DENUG:怀疑RESNET感知模型没有被调用。LCX20250702修改为无条件加载perceptualloss。
+###LCX20250702 修改，增加了def on_fit_start(self)函数。在RESUME之后检查感知LOSS，如果没有就加载。
 import os
 from nha.models.texture import MultiTexture
 from nha.models.flame import *
@@ -2079,3 +2080,18 @@ class NHAOptimizer(pl.LightningModule):
             log_dict['total_loss'] = total_loss
         
         return log_dict
+
+    def on_fit_start(self):
+        # resume后自动补加载perceptual loss
+        if getattr(self, "_perceptual_loss", None) is None:
+            try:
+                from nha.util.general import NoSubmoduleWrapper
+                from nha.optimization.perceptual_loss import ResNetLOSS
+                self._perceptual_loss = NoSubmoduleWrapper(ResNetLOSS())
+                if self._perceptual_loss is not None:
+                    self._perceptual_loss = self._perceptual_loss.to(self.device)
+                print("[LCX-DEBUG] perceptual loss loaded successfully in on_fit_start!")
+            except Exception as e:
+                print("[LCX-DEBUG] Failed to load perceptual loss network in on_fit_start:", e)
+                self._perceptual_loss = None
+                
