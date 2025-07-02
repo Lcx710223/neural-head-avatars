@@ -1,7 +1,7 @@
 """
 Code heavily inspired by https://github.com/JustusThies/NeuralTexGen/blob/master/models/VGG_LOSS.py
 """
-###LCX20250702怀疑RESNET感知没有调用DEBUG:
+###LCX20250702怀疑感知损失没有调用，设置LCX-DEBUG:
 import torch
 from torchvision import models
 from torchvision.transforms import Normalize
