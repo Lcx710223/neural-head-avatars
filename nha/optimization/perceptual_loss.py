@@ -97,10 +97,10 @@ class ResNet18(torch.nn.Module):
         vgg_outputs = namedtuple("VggOutputs", ['relu1_2', 'relu2_2', 'relu3_3', 'relu4_3'])
         out = vgg_outputs(relu1_2, relu2_2, relu3_3, relu4_3)
         # 调试输出每一层均值和方差
-        print(f"[PERCDEBUG][ResNet18] relu1_2 mean={relu1_2.mean().item():.6f}, std={relu1_2.std().item():.6f}")
-        print(f"[PERCDEBUG][ResNet18] relu2_2 mean={relu2_2.mean().item():.6f}, std={relu2_2.std().item():.6f}")
-        print(f"[PERCDEBUG][ResNet18] relu3_3 mean={relu3_3.mean().item():.6f}, std={relu3_3.std().item():.6f}")
-        print(f"[PERCDEBUG][ResNet18] relu4_3 mean={relu4_3.mean().item():.6f}, std={relu4_3.std().item():.6f}")
+        #print(f"[PERCDEBUG][ResNet18] relu1_2 mean={relu1_2.mean().item():.6f}, std={relu1_2.std().item():.6f}")
+        #print(f"[PERCDEBUG][ResNet18] relu2_2 mean={relu2_2.mean().item():.6f}, std={relu2_2.std().item():.6f}")
+        #print(f"[PERCDEBUG][ResNet18] relu3_3 mean={relu3_3.mean().item():.6f}, std={relu3_3.std().item():.6f}")
+        #print(f"[PERCDEBUG][ResNet18] relu4_3 mean={relu4_3.mean().item():.6f}, std={relu4_3.std().item():.6f}")
         return out
 
 class ResNetLOSS(torch.nn.Module):
@@ -115,22 +115,22 @@ class ResNetLOSS(torch.nn.Module):
             p.requires_grad = False
 
     def forward(self, fake, target, content_weight=1.0, style_weight=1.0):
-        print("[PERCDEBUG] ResNetLOSS.forward called")
+        print("[LCX-DEBUG] ResNetLOSS.forward called")
         vgg_fake = self.model(fake)
         vgg_target = self.model(target)
-        # 调试输出：每一层的均值和方差
+        ###LCX20250702 调试输出：每一层的均值和方差
         for i, (f, t) in enumerate(zip(vgg_fake, vgg_target)):
-            print(f"[PERCDEBUG] layer {i} fake mean={f.mean().item():.6f}, std={f.std().item():.6f}, target mean={t.mean().item():.6f}, std={t.std().item():.6f}")
+            print(f"[LCX-DEBUG] layer {i} fake mean={f.mean().item():.6f}, std={f.std().item():.6f}, target mean={t.mean().item():.6f}, std={t.std().item():.6f}")
         content_loss = self.criterion(vgg_target.relu2_2, vgg_fake.relu2_2)
-        print("[PERCDEBUG] content_loss:", content_loss.item())
+        print("[LCX-DEBUG] content_loss:", content_loss.item())
         gram_style = [gram_matrix(y) for y in vgg_target]
         style_loss = 0.0
         for j, (ft_y, gm_s) in enumerate(zip(vgg_fake, gram_style)):
             gm_y = gram_matrix(ft_y)
             l = self.criterion(gm_y, gm_s)
             style_loss += l
-            print(f"[PERCDEBUG] style_loss layer {j}:", l.item())
-        print("[PERCDEBUG] total style_loss:", style_loss)
+            print(f"[LCX-DEBUG] style_loss layer {j}:", l.item())
+        print("[LCX-DEBUG] total style_loss:", style_loss)
         total_loss = content_weight * content_loss + style_weight * style_loss
-        print("[PERCDEBUG] total perceptual loss:", total_loss.item() if hasattr(total_loss, "item") else total_loss)
+        print("[LCX-DEBUG] total perceptual loss:", total_loss.item() if hasattr(total_loss, "item") else total_loss)
         return total_loss
