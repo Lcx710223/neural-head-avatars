@@ -1,7 +1,7 @@
 """
 Code heavily inspired by https://github.com/JustusThies/NeuralTexGen/blob/master/models/VGG_LOSS.py
 """
-###LCX20250702 DEBUG，怀疑RESNET始终输出为零。
+###LCX20250702怀疑RESNET感知没有调用DEBUG:
 import torch
 from torchvision import models
 from torchvision.transforms import Normalize
@@ -81,11 +81,7 @@ class ResNet18(torch.nn.Module):
             p.requires_grad = False
 
     def forward(self, x):
-        """
-        assuming rgb input of shape N x 3 x H x W normalized to -1 ... +1
-        :param X:
-        :return:
-        """
+        print("[PERCDEBUG][ResNet18] forward called")
         self.eval()
         x = self.conv1(x)
         x = self.bn1(x)
@@ -119,14 +115,7 @@ class ResNetLOSS(torch.nn.Module):
             p.requires_grad = False
 
     def forward(self, fake, target, content_weight=1.0, style_weight=1.0):
-        """
-        assumes input images normalize to -1 ... + 1 and of shape N x 3 x H x W
-        :param fake:
-        :param target:
-        :param content_weight:
-        :param style_weight:
-        :return:
-        """
+        print("[PERCDEBUG] ResNetLOSS.forward called")
         vgg_fake = self.model(fake)
         vgg_target = self.model(target)
         # 调试输出：每一层的均值和方差
