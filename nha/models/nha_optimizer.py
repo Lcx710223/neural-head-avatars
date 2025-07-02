@@ -1191,6 +1191,18 @@ class NHAOptimizer(pl.LightningModule):
         mask = predicted_seg * mask
         rgb_loss = self._masked_L1(predicted_images, screen_colors, mask)
 
+        ###LCX20250702DEBUGS:检查为什么感知LOSS为零。
+        # DEBUG: 打印关键张量的统计
+        print(f"[DEBUG] predicted_images: min={predicted_images.min().item()}, max={predicted_images.max().item()}, mean={predicted_images.mean().item()}")
+        print(f"[DEBUG] screen_colors: min={screen_colors.min().item()}, max={screen_colors.max().item()}, mean={screen_colors.mean().item()}")
+        print(f"[DEBUG] mask: sum={mask.sum().item()}, shape={mask.shape}")
+        print(f"[DEBUG] w_perc: {self.get_current_lrs_n_lossweights()['w_perc']} (epoch={self.current_epoch})")
+
+        # 如果需要，也可以打印perceptual loss的真实值
+        if self._perceptual_loss is not None and self.get_current_lrs_n_lossweights()['w_perc'] > 0:
+            perc_loss_value = self._perceptual_loss(predicted_images, screen_colors.detach())
+            print(f"[DEBUG] perceptual_loss value: {perc_loss_value.item() if hasattr(perc_loss_value, 'item') else perc_loss_value}")
+
         # ATTENTION: perceptual loss only provides gradient to texture!
         # don't apply gradient to boundary of silhouette -> artifacts occur otherwise
         gradient_margin = int(max(H, W) / 50)
