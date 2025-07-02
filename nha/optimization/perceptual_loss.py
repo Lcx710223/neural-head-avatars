@@ -1,6 +1,7 @@
 """
 Code heavily inspired by https://github.com/JustusThies/NeuralTexGen/blob/master/models/VGG_LOSS.py
 """
+###LCX20250702 DEBUG，怀疑RESNET始终输出为零。
 import torch
 from torchvision import models
 from torchvision.transforms import Normalize
@@ -11,6 +12,12 @@ from pathlib import Path
 sys.path.append(str((Path(__file__).parents[2]/"deps")))
 from InsightFace.recognition.arcface_torch.backbones import get_model
 
+def gram_matrix(y):
+    (b, ch, h, w) = y.size()
+    features = y.view(b, ch, w * h)
+    features_t = features.transpose(1, 2)
+    gram = features.bmm(features_t) / (ch * h * w)
+    return gram
 
 class VGG16(torch.nn.Module):
     def __init__(self, requires_grad=False):
@@ -53,14 +60,14 @@ class VGG16(torch.nn.Module):
         out = vgg_outputs(h_relu1_2, h_relu2_2, h_relu3_3, h_relu4_3)
         return out
 
-
 class ResNet18(torch.nn.Module):
     def __init__(self, weight_path):
         super(ResNet18, self).__init__()
         net = get_model("r18")
-        # net.load_state_dict(torch.load(weight_path))
-        # LCX: 添加 map_location='cpu' 将模型权重加载到 CPU 上
-        net.load_state_dict(torch.load(weight_path, map_location=torch.device('cpu')))
+        print("[PERCDEBUG] loading weights from", weight_path)
+        res = net.load_state_dict(torch.load(weight_path, map_location=torch.device('cpu')), strict=False)
+        print("[PERCDEBUG] missing_keys:", res.missing_keys)
+        print("[PERCDEBUG] unexpected_keys:", res.unexpected_keys)
         net.eval()
         self.conv1 = net.conv1
         self.bn1 = net.bn1
@@ -93,16 +100,12 @@ class ResNet18(torch.nn.Module):
         relu4_3 = x.clone()
         vgg_outputs = namedtuple("VggOutputs", ['relu1_2', 'relu2_2', 'relu3_3', 'relu4_3'])
         out = vgg_outputs(relu1_2, relu2_2, relu3_3, relu4_3)
+        # 调试输出每一层均值和方差
+        print(f"[PERCDEBUG][ResNet18] relu1_2 mean={relu1_2.mean().item():.6f}, std={relu1_2.std().item():.6f}")
+        print(f"[PERCDEBUG][ResNet18] relu2_2 mean={relu2_2.mean().item():.6f}, std={relu2_2.std().item():.6f}")
+        print(f"[PERCDEBUG][ResNet18] relu3_3 mean={relu3_3.mean().item():.6f}, std={relu3_3.std().item():.6f}")
+        print(f"[PERCDEBUG][ResNet18] relu4_3 mean={relu4_3.mean().item():.6f}, std={relu4_3.std().item():.6f}")
         return out
-
-
-def gram_matrix(y):
-    (b, ch, h, w) = y.size()
-    features = y.view(b, ch, w * h)
-    features_t = features.transpose(1, 2)
-    gram = features.bmm(features_t) / (ch * h * w)
-    return gram
-
 
 class ResNetLOSS(torch.nn.Module):
     def __init__(self, criterion=torch.nn.L1Loss(reduction='mean')):
@@ -126,15 +129,19 @@ class ResNetLOSS(torch.nn.Module):
         """
         vgg_fake = self.model(fake)
         vgg_target = self.model(target)
-
+        # 调试输出：每一层的均值和方差
+        for i, (f, t) in enumerate(zip(vgg_fake, vgg_target)):
+            print(f"[PERCDEBUG] layer {i} fake mean={f.mean().item():.6f}, std={f.std().item():.6f}, target mean={t.mean().item():.6f}, std={t.std().item():.6f}")
         content_loss = self.criterion(vgg_target.relu2_2, vgg_fake.relu2_2)
-
-        # gram_matrix
+        print("[PERCDEBUG] content_loss:", content_loss.item())
         gram_style = [gram_matrix(y) for y in vgg_target]
         style_loss = 0.0
-        for ft_y, gm_s in zip(vgg_fake, gram_style):
+        for j, (ft_y, gm_s) in enumerate(zip(vgg_fake, gram_style)):
             gm_y = gram_matrix(ft_y)
-            style_loss += self.criterion(gm_y, gm_s)
-
+            l = self.criterion(gm_y, gm_s)
+            style_loss += l
+            print(f"[PERCDEBUG] style_loss layer {j}:", l.item())
+        print("[PERCDEBUG] total style_loss:", style_loss)
         total_loss = content_weight * content_loss + style_weight * style_loss
+        print("[PERCDEBUG] total perceptual loss:", total_loss.item() if hasattr(total_loss, "item") else total_loss)
         return total_loss
