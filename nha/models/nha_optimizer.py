@@ -1,8 +1,13 @@
 ###LCX 20250612 大修改，COPILOT编码。
 ###LCX 20250619 修改1：增加了 def compute_loss(self, outputs, batch)。修改2：forward（）。修改3：step()。本次修改见COPILOT-NHA-GPU-20250619A，主要解决GPU显存不足，降低算力要求之后。
 ###LCX 20250621 修改：回调checkpoints的存放路径，应该统一指定到LCX-ME01/checkpoints里去。LCX20250702DENUG:怀疑RESNET感知模型没有被调用。LCX20250702修改为无条件加载perceptualloss。
-###LCX20250702 修改，增加了def on_fit_start(self)函数。在RESUME之后检查感知LOSS，如果没有就加载。
+###LCX20250702 修改，增加了def on_fit_start(self)函数。在RESUME之后检查感知LOSS，如果没有就加载。LCX20250703修改：将感知损失的初始化和设备迁移移到__init__中。
+###LCX20250704，修改，把感知损失的模型加载从ON-FIT-START()转移到_INIT_当中。
 import os
+
+# Change the current working directory to the root of the cloned repository
+%cd /content/neural-head-avatars
+
 from nha.models.texture import MultiTexture
 from nha.models.flame import *
 from nha.models.offset_mlp import OffsetMLP
@@ -31,8 +36,8 @@ from nha.util.general import (
     stack_dicts,
 )
 from nha.util.screen_grad import screen_grad
-from nha.util.log import get_logger
 from nha.util.lbs import batch_rodrigues
+from nha.util.log import get_logger
 
 from pytorch3d.renderer import TexturesVertex, rasterize_meshes
 from pytorch3d.renderer.mesh.rasterizer import Fragments
@@ -132,13 +137,13 @@ class NHAOptimizer(pl.LightningModule):
     def __init__(self, max_frame_id, w_lap, w_silh, w_semantic_hair, body_part_weights, **kwargs):
         super().__init__()
         self.save_hyperparameters()
-    
+
         # 保持手动优化模式
         self.automatic_optimization = False
-    
+
         # 初始化训练阶段
         self._current_stage = "flame"
-    
+
         # 初始化callbacks，调整日志记录频率
         self.callbacks = [
             pl.callbacks.ModelCheckpoint(
@@ -163,6 +168,21 @@ class NHAOptimizer(pl.LightningModule):
             "precision": "32-true",
             "accumulate_grad_batches": 1,
         }
+
+
+        # 将感知损失的初始化和设备迁移移到__init__中
+        # Perceptual Loss Initialization
+        try:
+            self._perceptual_loss = NoSubmoduleWrapper(ResNetLOSS())
+            # Move perceptual loss to the device during initialization
+            # Use self.device if available, otherwise default to 'cuda' if a GPU is available
+            device = self.device if hasattr(self, 'device') else ('cuda' if torch.cuda.is_available() else 'cpu')
+            self._perceptual_loss = self._perceptual_loss.to(device)
+            print("[LCX-DEBUG] Perceptual loss initialized and moved to device in __init__.")
+        except Exception as e:
+            print(f"[LCX-DEBUG] Failed to initialize perceptual loss network in __init__: {e}")
+            self._perceptual_loss = None
+
 
         # flame model
         ignore_faces = np.load(FLAME_LOWER_NECK_FACES_PATH)
@@ -250,19 +270,6 @@ class NHAOptimizer(pl.LightningModule):
         self._leaky_hinge = LeakyHingeLoss(0.0, 1.0, 0.3)
         self._masked_L1 = MaskedCriterion(torch.nn.L1Loss(reduction="none"))
 
-        ###LCX20250701把路径修改为COLAB里的绝对路径：
-        ###LCX20250702修改为无条件加载【perceptual loss】：
-        try:
-            self._perceptual_loss = NoSubmoduleWrapper(ResNetLOSS())
-            print("[LCX-DEBUG] perceptual loss loaded successfully!")
-        except Exception as e:
-            print("[LCX-DEBUG] Failed to load perceptual loss network:", e)
-            self._perceptual_loss = None
-
-        # ====== 修正部分：将感知损失网络迁移到 self.device (cuda/cpu) ======
-        if self._perceptual_loss is not None:
-            self._perceptual_loss = self._perceptual_loss.to(self.device)
-        # ====== END 修正 ======
 
         # training stage
         self.fit_residuals = False
@@ -272,1826 +279,477 @@ class NHAOptimizer(pl.LightningModule):
         self._trans_lr = [0.1 * i for i in self.hparams["flame_lr"]]
 
         self._semantic_thr = 0.99
-        self._blurred_vertex_labels = self._flame.spatially_blurred_vert_labels
-        self._part_weights = None
+        self._blurred_vertex_labels = self._flame.sparse_vertex_labels(self.semantic_labels, 10)
 
-        self._edge_mask = None
-
-        # limits for pose and expression conditioning
-        self.register_buffer("expr_min", torch.zeros(100) - 100)
-        self.register_buffer("expr_max", torch.zeros(100) + 100)
-        self.register_buffer("pose_min", torch.zeros(15) - 100)
-        self.register_buffer("pose_max", torch.zeros(15) + 100)
-        self.register_buffer("mouth_conditioning_min", torch.zeros(13) - 100)
-        self.register_buffer("mouth_conditioning_max", torch.zeros(13) + 100)
-
-    def configure_callbacks(self):
-        return self.callbacks  
-    
-    
-    def on_train_start(self):
-        # 确保阶段被正确初始化
-        if not hasattr(self, '_current_stage'):
-            self._current_stage = "flame"
-
+    # Removed on_fit_start as the perceptual loss initialization is moved to __init__
+    # def on_fit_start(self):
+    #     # Perceptual Loss Initialization moved to __init__
+    #     pass
 
     def set_stage(self, stage):
-        valid_stages = ["flame", "offset", "texture", "joint_flame", "off_resid", "all_resid"]
-        if stage not in valid_stages:
-            raise ValueError(f"Invalid stage {stage}. Must be one of {valid_stages}")
         self._current_stage = stage
-
-    @property
-    def current_stage(self):
-        if not hasattr(self, '_current_stage'):
-            self._current_stage = "flame"
-        return self._current_stage
-     
-    @current_stage.setter
-    def current_stage(self, value):
-        self.set_stage(value)
-
-    def on_train_end(self) -> None:
-        # determining dynamic condition extrema for validation
-        self.get_dyn_cond_extrema(self.trainer.train_dataloader.dataset.datasets)
-
-    def _get_current_optimizer(self):
-        optimizers = self.optimizers()
-        flame_optim, offset_optim, tex_optim, joint_flame_optim, off_resid_optim, all_resid_optim = optimizers
-    
-        # 根据当前阶段返回相应的优化器
-        if not hasattr(self, '_current_stage'):
-            self._current_stage = "flame"
-        
-        if self._current_stage == "flame":
-            return flame_optim
-        elif self._current_stage == "offset":
-            return offset_optim
-        elif self._current_stage == "texture":
-            return tex_optim
-        elif self._current_stage == "joint_flame":
-            return joint_flame_optim
-        elif self._current_stage == "off_resid":
-            return off_resid_optim
-        elif self._current_stage == "all_resid":
-            return all_resid_optim
-        else:
-            return flame_optim  # 默认返回FLAME优化器
-
-
-
-    def _predict_offsets(self, neck_rot):
-        """
-        predicts vertex offsets, dynamic offsets are only enabled for neck region. Dynamic and static offsets are
-        blended smoothly
-
-        :param neck_rot: neck rotation vector of shape N x 3
-        :return: offset tensor of shape N x V x 3
-        """
-        batch_size = len(neck_rot)
-        final_offsets = torch.zeros(batch_size, len(self._flame.v_template), 3, device=self.device)
-        v_temp = self._flame.v_template_normed
-        v_temp = v_temp[self._offset_indices]
-
-        neck = self._flame.apply_rotation_limits(neck=neck_rot)
-
-        conditions = batch_rodrigues(neck.detach()).view(-1, 9)
-
-        # increase batch_size by one for static mesh
-        batch_size += 1
-
-        # add zero condition to the end
-        static_cond = torch.zeros_like(conditions[0])
-        conditions = torch.cat([conditions, static_cond[None]], dim=0)
-
-        # N x D -> N*V x D
-        V = len(v_temp)
-
-        # V x 3 -> N*V x 3
-        v_temp = v_temp[None, ...]
-        x = torch.cat([v_temp, self._vert_feats], dim=-1).expand(batch_size, -1, -1)
-
-        mlp_out = self._offset_mlp(x, conditions)
-        batch_size -= 1
-        dynamic_offsets = mlp_out[:batch_size]
-        static_offsets = mlp_out[[-1]].expand(batch_size, -1, -1)
-
-        if self._blurred_vertex_labels.device != self.device:
-            self._blurred_vertex_labels = self._blurred_vertex_labels.to(self.device)
-
-        neck_index = self.semantic_labels.index("neck")
-        alpha = self._blurred_vertex_labels[self._offset_indices, neck_index][None, :, None]
-
-        min_alpha, max_alpha = 0.0, 1.0
-        alpha = alpha.clamp(min_alpha, max_alpha)
-        offsets = dynamic_offsets * alpha + (1 - alpha) * static_offsets
-
-        # N * V x 3 -> N x V x 3
-        final_offsets[:, self._offset_indices] = offsets.view(batch_size, V, 3)
-
-        return final_offsets
-
-    def _create_flame_param_batch(self, batch, ignore_shape=False, ignore_expr=False, ignore_pose=False,
-                                  ignore_offsets=False):
-        """
-        adds residual para
-        :param batch:
-        :param ignore_shape:
-        :param ignore_expr:
-        :param ignore_pose:
-        :param ignore_offsets:
-        :return: dict with entries:
-                    - shape: N x 300 FLAME shape parameters
-                    - expr: N x 100 FLAME expression parameters
-                    - neck: N x 3 neck rotation vector
-                            (BEFORE APPLYING TANH TO ENFORCE ROTATION LIMITS, see flame._apply_rotation_limit())
-                    - jaw: N x 3 jaw rotation vector
-                            (BEFORE APPLYING TANH TO ENFORCE ROTATION LIMITS, see flame._apply_rotation_limit())
-                    - eyes: N x 6 eye rotation vectors
-                    - rotation: N x 3 global rotation vector
-                    - translation: N x 3 global translation vector
-                    - offsets: N x V x 3 vertex offset tensor
-        """
-
-        N = len(iter(batch.values()).__next__())
-        indices = batch.get("frame", None)
-
-        if indices is None:
-            ignore_pose = True
-            ignore_expr = True
-
-        p = {}
-
-        if ignore_shape:
-            p["shape"] = 0
-        else:
-            p["shape"] = self._shape.expand(N, self._shape.shape[-1])
-
-        if ignore_expr:
-            p["expr"] = 0
-        else:
-            p["expr"] = self._expr[indices]
-
-        if ignore_pose:
-            p["neck"] = 0
-            p["jaw"] = 0
-            p["eyes"] = 0
-            p["rotation"] = 0
-            p["translation"] = 0
-        else:
-            p["neck"] = self._neck_pose[indices]  # * torch.tensor([[0, 1., 0]], device=self.device)
-            p["jaw"] = self._jaw_pose[indices]
-            p["eyes"] = self._eyes_pose[indices]
-            p["rotation"] = self._rotation[indices]
-            p["translation"] = self._translation[indices]
-
-        # adding parameters from dataset
-        p["shape"] = p["shape"] + batch.get("flame_shape", 0)
-        p["expr"] = p["expr"] + batch.get("flame_expr", 0)
-        p["translation"] = p["translation"] + batch.get("flame_trans", 0)
-        p["rotation"] = p["rotation"] + batch["flame_pose"][:, :3]
-        p["neck"] = p["neck"] + batch["flame_pose"][:, 3:6]
-        p["jaw"] = p["jaw"] + batch["flame_pose"][:, 6:9]
-        p["eyes"] = p["eyes"] + batch["flame_pose"][:, 9:15]
-
-        if ignore_offsets:
-            p["offsets"] = None
-        else:
-            p["offsets"] = self._predict_offsets(p["neck"])
-
-        return p
-
-    def _forward_flame(self, flame_params, return_mouth_conditioning=False):
-        """
-        Evaluates the flame head model
-
-        :param flame_params: flame parameters dictionary as returned by self._create_flame_param_batch()
-        :param return_mouth_conditioning: whether to return mouth conditioning for texture MLP or not
-        :return:
-            - vertices: N x V x 3
-            - lmk: N x 68 x 3
-            - (optional) mouth_conditioning: N x 13
-        """
-
-        flame_results = self._flame(
-            **flame_params,
-            zero_centered=True,
-            use_rotation_limits=True,
-            return_landmarks="static",
-            return_mouth_conditioning=return_mouth_conditioning,
-        )
-        if len(flame_results) == 3:
-            verts, lmks_static, mouth_conditioning = flame_results
-        else:
-            verts, lmks_static = flame_results
-            mouth_conditioning = None
-
-        if mouth_conditioning is None:
-            return verts, lmks_static
-        else:
-            return verts, lmks_static, mouth_conditioning
-
-    def _rasterize(self, meshes, cameras, image_size, center_prediction=False):
-        """
-        Rasterizes meshes using a standard rasterization approach
-        :param meshes:
-        :param cameras:
-        :param image_size:
-        :return: fragments:
-                 screen_coords: N x H x W x 2  with x, y values following pytorch3ds NDC-coord system convention
-                                top left = +1, +1 ; bottom_right = -1, -1
-        """
-        assert len(meshes) == len(cameras)
-
-        eps = None
-        verts_world = meshes.verts_padded()
-        verts_view = cameras.get_world_to_view_transform().transform_points(verts_world, eps=eps)
-        projection_trafo = cameras.get_projection_transform().compose(cameras.get_ndc_camera_transform())
-        verts_ndc = projection_trafo.transform_points(verts_view, eps=eps)
-        verts_ndc[..., 2] = verts_view[..., 2]
-
-        if center_prediction:
-            centers = 0.5 * (verts_ndc[..., :2].max(dim=-2, keepdim=True).values +
-                             verts_ndc[..., :2].min(dim=-2, keepdim=True).values)
-            verts_ndc[..., :2] = verts_ndc[..., :2] - centers
-
-        meshes_ndc = meshes.update_padded(new_verts_padded=verts_ndc)
-
-        verts_packed = meshes_ndc.verts_packed()
-        faces_packed = meshes_ndc.faces_packed()
-        face_verts = verts_packed[faces_packed]
-
-        perspective_correct = cameras.is_perspective()
-        znear = cameras.get_znear()
-        if isinstance(znear, torch.Tensor):
-            znear = znear.min().item()
-        z_clip = None if not perspective_correct or znear is None else znear / 2
-
-        with torch.no_grad():
-            fragments = rasterize_meshes(
-                meshes_ndc,
-                image_size=image_size,
-                blur_radius=0,
-                faces_per_pixel=2,
-                bin_size=None,
-                max_faces_per_bin=None,
-                clip_barycentric_coords=False,
-                perspective_correct=True,
-                cull_backfaces=False,
-                z_clip_value=z_clip,
-                cull_to_frustum=False,
-            )
-
-            vert_semantics = self._flame.vert_labels
-            face_semantics = vert_semantics.repeat(len(meshes), 1)[meshes_ndc.faces_packed()]
-            sem_labels = interpolate_face_attributes(fragments[0], fragments[2], face_semantics)
-
-            # find region where eye overlaps eyeregion
-            # left
-            leye_idx = self.semantic_labels.index("left_eyeball")
-            leyeregion_idx = self.semantic_labels.index("left_eye_region")
-            left_overlaps = (sem_labels[..., [0], leye_idx] > 0) & (sem_labels[..., [1], leyeregion_idx] > 0)
-            # right
-            reye_idx = self.semantic_labels.index("right_eyeball")
-            reyeregion_idx = self.semantic_labels.index("right_eye_region")
-            right_overlaps = (sem_labels[..., [0], reye_idx] > 0) & (sem_labels[..., [1], reyeregion_idx] > 0)
-
-            overlaps = (left_overlaps | right_overlaps).int()  # N x H x W x 1
-
-            pix_to_face = fragments[0][..., [0]] * (1 - overlaps) + fragments[0][..., [1]] * overlaps
-            zbuf = fragments[1][..., [0]] * (1 - overlaps) + fragments[1][..., [1]] * overlaps
-            bary_coords = fragments[2][..., [0], :] * (1 - overlaps.unsqueeze(-1)) + \
-                          fragments[2][..., [1], :] * overlaps.unsqueeze(-1)
-            dists = fragments[3][..., [0]] * (1 - overlaps) + fragments[3][..., [1]] * overlaps
-
-            fragments = Fragments(pix_to_face=pix_to_face, zbuf=zbuf, bary_coords=bary_coords, dists=dists)
-
-        # right now this only works with faces_per_pixel == 1
-        pix2face, bary_coords = fragments.pix_to_face, fragments.bary_coords
-        is_visible = pix2face[..., 0] > -1
-
-        # shape (sum(is_visible), 3, 3)
-        visible_faces = pix2face[is_visible][:, 0]
-        visible_face_verts = face_verts[visible_faces]
-        # shape (sum(is_visible), 3, 1)
-        visible_bary_coords = bary_coords[is_visible][:, 0][..., None]
-
-        visible_surface_point = visible_face_verts * visible_bary_coords
-        visible_surface_point = visible_surface_point.sum(dim=1)
-
-        screen_coords = torch.zeros(*pix2face.shape[:3], 2).to(self.device)
-        screen_coords[is_visible] = visible_surface_point[:, :2]  # now have gradient
-
-        # if images are not-squared we need to adjust the screen coordinates
-        # by the aspect ratio => coords given as [-1,1] for shorter edge and
-        # [-s,s] for longer edge where s is the aspect ratio
-        H, W = image_size
-        if H > W:
-            s = H / W
-            screen_coords[..., 1] *= 1 / s
-        elif H < W:
-            s = W / H
-            screen_coords[..., 0] *= 1 / s
-
-        return fragments, screen_coords
-
-    def _rasterize_flame(self, batch, verts):
-        """
-
-        :param batch:
-        :param verts:
-        :return:
-        """
-
-        K = batch["cam_intrinsic"]
-        RT = batch["cam_extrinsic"]
-
-        if len(verts) != len(K):
-            warnings.warn("Batch size and vertex batch size don't match. Cutting batch to have same length as verts.")
-            K = K[: len(verts)]
-            RT = RT[: len(verts)]
-
-        H, W = batch["rgb"].shape[-2:]
-
-        # FILL SCENE
-        cameras = create_camera_objects(K, RT, (H, W), self.device)
-        flame_meshes = Meshes(verts=verts, faces=self._flame.faces[None].expand(len(verts), -1, -1))
-
-        # RASTERIZING FRAGMENTS
-        return self._rasterize(flame_meshes, cameras, (H, W))
-
-    def _render_silhouette(self, verts, K, RT, H, W, return_rasterizer_results=False, rasterized_results=None):
-        """
-        Render flame silhouette. ATTENTION: NO GRADIENT ATTACHED
-        :param verts:
-        :param K:
-        :param RT:
-        :param H:
-        :param W:
-        :return: tensor of shape N x 1 x H x W with values ranging from 0 ... 1
-        """
-
-        # FILL SCENE
-        cameras = create_camera_objects(K, RT, (H, W), self.device)
-        flame_meshes = Meshes(verts=verts, faces=self._flame.faces[None].expand(len(verts), -1, -1))
-
-        # RASTERIZING FRAGMENTS
-        if rasterized_results is not None:
-            fragments, screen_coords = rasterized_results
-        else:
-            fragments, screen_coords = self._rasterize(flame_meshes, cameras, (H, W))
-        N, H, W, K, _ = fragments.bary_coords.shape
-
-        seg = (fragments.pix_to_face > -1).float().permute(0, 3, 1, 2)
-
-        if return_rasterizer_results:
-            return seg, dict(fragments=fragments, screen_coords=screen_coords)
-        else:
-            return seg
-
-    def _render_normals(self, verts, K, RT, H, W, cameras=None, flame_meshes=None, faces=None,
-                        return_rasterizer_results=False, rasterized_results=None):
-        """
-        renders tensor of normals of shape N x 3 x H x W
-        :param batch:
-        :param verts:
-        :param faces: faces of shape N x F x 3, falls back to flame faces
-        :return:
-        """
-
-        # FILL SCENE
-        if cameras is None:
-            cameras = create_camera_objects(K, RT, (H, W), self.device)
-        if flame_meshes is None:
-            faces = faces if faces is not None else self._flame.faces[None].expand(len(verts), -1, -1)
-            flame_meshes = Meshes(verts=verts, faces=faces)
-
-        # RASTERIZING FRAGMENTS
-        if rasterized_results is not None:
-            fragments, screen_coords = rasterized_results
-        else:
-            fragments, screen_coords = self._rasterize(flame_meshes, cameras, (H, W))
-        N, H, W, K, _ = fragments.bary_coords.shape
-
-        # NORMAL RENDERING
-        face_normals = flame_meshes.verts_normals_padded()  # N x V_max x 3
-        face_normals = cameras.get_world_to_view_transform().transform_normals(face_normals)
-        face_normals = face_normals.flatten(end_dim=1)[flame_meshes.verts_padded_to_packed_idx()]  # N * V x 3
-        face_normals = face_normals[flame_meshes.faces_packed()]
-        pixel_face_normals = interpolate_face_attributes(fragments.pix_to_face, fragments.bary_coords, face_normals)
-
-        blend_params = BlendParams(sigma=0, gamma=0, background_color=[0.0] * 3)
-        normal_rendering = hard_feature_blend(pixel_face_normals, fragments, blend_params)
-        normal_rendering = normal_rendering.permute(0, 3, 1, 2)  # shape N x 3+1 x H x W
-
-        # flip orientations
-        normal_rendering[:, :3] *= -1
-
-        if return_rasterizer_results:
-            return normal_rendering, dict(fragments=fragments, screen_coords=screen_coords)
-
-        return normal_rendering   # shape N x 3+1 x H x W
-
-    def _render_rgba(self, verts, K, RT, H, W, expr, pose, mouth_cond, return_rasterizer_results=False,
-                     rasterized_results=None, rendered_normals=None, center_prediction=False):
-
-        """
-        render rgba image tensor of shape N x 4 x H x W
-        first 3 channels normalized to -1 ... 1; 4th channel 0 ... 1
-
-        if return_screen_coords == True: also returns dict with fragments and screen coords (N x H x W x 2) in ndc space
-
-        :param verts:
-        :param K:
-        :param RT:
-        :param H:
-        :param W:
-        :param expr: Nx 100
-        :param: pose: N x 15
-        :param: mouth_conditioning: N x 13
-        :param rendered_normals: tensor of shape N x 3 x H x W of rendered and blended normals
-                                 (serve as input for normal encoder)
-        :return:
-        """
-
-        # FILL SCENE
-        cameras = create_camera_objects(K, RT, (H, W), self.device)
-        flame_meshes = Meshes(verts=verts, faces=self._flame.faces[None].expand(len(verts), -1, -1))
-
-        # RASTERIZING FRAGMENTS
-        if rasterized_results is not None and not center_prediction:
-            fragments, screen_coords = rasterized_results
-        else:
-            fragments, screen_coords = self._rasterize(flame_meshes, cameras, (H, W),
-                                                       center_prediction=center_prediction)
-        N, H, W, faces_per_pix, _ = fragments.bary_coords.shape
-
-        assert faces_per_pix == 1  # otherwise explicit texels might get messed up
-
-        # FACE COORD RENDERING
-        face_coords = self._flame.face_coords_normed.repeat(N, 1, 1)
-        # shape: N x H x W x K x 3
-        pixel_face_coords = interpolate_face_attributes(fragments.pix_to_face, fragments.bary_coords, face_coords)
-
-        # EXPL TEXTURE SAMPLING
-        mask = fragments.pix_to_face != -1
-        uv_coords = self._flame.face_uvcoords.repeat(N, 1, 1)
-
-        # shape: N x H x W x K x 2
-        pixel_uv_coords = interpolate_face_attributes(fragments.pix_to_face, fragments.bary_coords, uv_coords)[..., :2]
-        pixel_uv_ids = self._flame.face_uvmap.repeat(N)[fragments.pix_to_face]  # N x H x W x K
-        pixel_uv_ids[~mask] = -1
-        # pixel_expl_texels = expl_texels.permute(0, 2, 3, 1) \
-        #     .unsqueeze(-2).expand(-1, -1, -1, K, -1)  # N x H x W x K x 3
-
-        # predicting frequencies and phase shifts for different regions
-        #  clip dynamic conditions
-        expr, pose, mouth_cond = self._clip_expr_pose_mc(expr, pose, mouth_cond)
-
-        mouth_frequencies, mouth_phase_shifts = self._texture.predict_frequencies_phase_shifts(mouth_cond)
-        stat_frequencies, stat_phase_shifts = self._texture.predict_frequencies_phase_shifts(
-            torch.zeros_like(mouth_cond))
-
-        frequencies = torch.stack((mouth_frequencies, stat_frequencies), dim=1)  # N x 3 x C
-        phase_shifts = torch.stack((mouth_phase_shifts, stat_phase_shifts), dim=1)  # N x 3 x C
-
-        # rendering semantic map
-        semantics = self._render_semantics(verts, K, RT, H, W, rasterized_results=[fragments, screen_coords],
-                                           return_confidence=True).detach()
-
-        with torch.no_grad():
-            mouth_weights = semantics[:, self.semantic_labels.index("mouth")]
-            face_weights = (semantics[:, -1] - mouth_weights).clip(min=0)
-            region_weights = torch.stack((mouth_weights, face_weights), dim=-1)  # N x H x W x 3
-            region_weights = region_weights.view(N, H, W, 1, -1)  # N x H x W x K x 3
-
-        if rendered_normals is None:
-            rendered_normals = self._render_normals(verts, K, RT, H, W, cameras=cameras, flame_meshes=flame_meshes,
-                                                    rasterized_results=[fragments, screen_coords], )[:, :3]
-
-        # MLP TEXTURE SAMPLING
-        pixel_face_coords_masked = pixel_face_coords[mask]
-        pixel_uv_coords_masked = pixel_uv_coords[mask]
-        pixel_uv_ids_masked = pixel_uv_ids[mask]
-
-        ### LCX 解决方法：
-        pixel_uv_coords_masked = pixel_uv_coords_masked.to(self.device) ###LCX1
-        pixel_uv_ids_masked = pixel_uv_ids_masked.to(self.device) ###LCX2
-
-        if getattr(self, "n_upsample", 1) != 1:
-            rendered_normals = torchvision.transforms.functional.resize(rendered_normals, (
-                    torch.tensor(rendered_normals.shape[-2:]) / self.n_upsample).int().tolist())
-        normal_encoding = self._normal_encoder(rendered_normals)  # N x C x H x W
-
-        if getattr(self, "n_upsample", 1) != 1:
-            normal_encoding = torchvision.transforms.functional.resize(normal_encoding, (H, W))
-
-        pixel_normal_encoding = normal_encoding.permute(0, 2, 3, 1)
-        pixel_normal_encoding = pixel_normal_encoding.unsqueeze(-2).expand(-1, -1, -1, faces_per_pix,-1)  # N x H x W x K x D
-        pixel_normal_encoding_masked = pixel_normal_encoding[mask]
-        
-        # LCX:问题在于此： 
-        pixel_expl_features_masked = self._explFeatures(pixel_uv_coords_masked.view(1, 1, -1, 2), pixel_uv_ids_masked.view(1, 1, -1))
-        pixel_expl_features_masked = pixel_expl_features_masked[0, :, 0, :].permute(1, 0)
-        pixel_expl_features_masked = pixel_expl_features_masked.to(self.device) ###LCX3
-
-        static_mlp_conditions_masked = torch.cat((pixel_face_coords_masked, pixel_expl_features_masked), dim=-1)
-        n_masked = torch.arange(N, device=mask.device).view(N, 1, 1, 1).expand(N, H, W, faces_per_pix)[mask] ###LCX4
-        region_weights_masked = region_weights[mask]  # N' x 3
-        frequencies_masked = torch.sum(frequencies[n_masked] * region_weights_masked.unsqueeze(-1), dim=1)
-        phase_shifts_masked = torch.sum(phase_shifts[n_masked] * region_weights_masked.unsqueeze(-1), dim=1)
-        # N' x C
-
-        mlp_pixel_rgb = torch.zeros(N, H, W, faces_per_pix, 3, dtype=fragments.bary_coords.dtype,
-                                    device=fragments.bary_coords.device)
-
-        mlp_pixel_rgb[mask] = self._texture.forward(static_mlp_conditions_masked, frequencies_masked,
-                                                    phase_shifts_masked,
-                                                    dynamic_conditions=pixel_normal_encoding_masked)
-
-        blend_params = BlendParams(sigma=0, gamma=0, background_color=[1.0] * 3)
-        mlp_rgba_pred = hard_feature_blend(mlp_pixel_rgb, fragments, blend_params)
-        # N x H x W x 3 + 1
-
-        # if random_select:
-        #     feature_img[~mask.expand(-1, -1, -1, 4)] = 1
-
-        mlp_rgba_pred = mlp_rgba_pred.permute(0, 3, 1, 2)
-
-        if return_rasterizer_results:
-            return mlp_rgba_pred, dict(fragments=fragments, screen_coords=screen_coords)
-        else:
-            return mlp_rgba_pred  # N x 4 x H x W
-
-    @torch.no_grad()
-    def get_dyn_cond_extrema(self, dataset=None):
-        dataset = dataset if dataset is not None else self.trainer.train_dataloader.dataset.datasets
-
-        dataloader = DataLoader(dataset, batch_size=48, num_workers=4)
-
-        for i, batch in enumerate(dataloader):
-            batch = dict_2_device(batch, self.device)
-            flame_params_offsets = self._create_flame_param_batch(batch)
-            _, _, mc = self._forward_flame(flame_params_offsets, return_mouth_conditioning=True)
-            expr = flame_params_offsets["expr"]
-            pose = torch.cat((flame_params_offsets["rotation"], flame_params_offsets["neck"],
-                              flame_params_offsets["jaw"], flame_params_offsets["eyes"]), dim=1)
-
-            if i == 0:
-                self.expr_min = torch.min(expr, dim=0).values
-                self.expr_max = torch.max(expr, dim=0).values
-                self.pose_min = torch.min(pose, dim=0).values
-                self.pose_max = torch.max(pose, dim=0).values
-                self.mouth_conditioning_min = torch.min(mc, dim=0).values
-                self.mouth_conditioning_max = torch.max(mc, dim=0).values
-            else:
-                self.expr_min = torch.min(self.expr_min, torch.min(expr, dim=0).values)
-                self.expr_max = torch.max(self.expr_max, torch.max(expr, dim=0).values)
-                self.pose_min = torch.min(self.pose_min, torch.min(pose, dim=0).values)
-                self.pose_max = torch.max(self.pose_max, torch.max(pose, dim=0).values)
-                self.mouth_conditioning_min = torch.min(self.mouth_conditioning_min, torch.min(mc, dim=0).values)
-                self.mouth_conditioning_max = torch.max(self.mouth_conditioning_max, torch.max(mc, dim=0).values)
-
-        return (
-            (self.expr_min, self.expr_max),
-            (self.pose_min, self.pose_max),
-            (self.mouth_conditioning_min, self.mouth_conditioning_max),
-        )
-
-    def _clip_expr_pose_mc(self, expr, pose, mouth_conditioning):
-        if not self.training:
-            expr = expr.clip(min=self.expr_min, max=self.expr_max)
-            pose = pose.clip(min=self.pose_min, max=self.pose_max)
-            mouth_conditioning = mouth_conditioning.clip(min=self.mouth_conditioning_min,
-                                                         max=self.mouth_conditioning_max)
-
-        #  Soft Clipping: conditions are scaled such that "normal" movements result in parameter changes of roughly
-        #  +-2 before applying tanh. sigma can be set as hyperparameter to strengthen (high sigma) or weaken (low sigma)
-        #  non-linear component of clipping
-        sig = self.hparams["soft_clip_sigma"]
-        if sig > 0:
-            expr = torch.tanh(expr * sig)
-            pose = torch.tanh(
-                torch.cat((pose[..., :3] / (np.pi / 4.0),  # global rot in angles with native range +- pi/2
-                           pose[..., 3:9],
-                           pose[..., 9:] / (np.pi / 4.0),  # eye rot in angles with native range +- pi/2
-                           ), dim=-1, ) * sig)
-            mouth_conditioning = torch.cat(
-                (
-                    mouth_conditioning[..., :-3],
-                    torch.tanh(mouth_conditioning[..., -3:] / (np.pi / 4.0) * sig),
-                ),
-                dim=-1,
-            )
-
-        return expr, pose, mouth_conditioning
-
-    def _render_semantics(self, verts, K, RT, H, W, return_rasterizer_results=False, rasterized_results=None,
-                          return_confidence=False):
-        """
-        render semantic image tensor of shape N x C+1 x H x W (last channel is bg channel)
-        entries between 0 ... 1
-
-        if return_screen_coords == True: also returns dict with fragments and screen coords (N x H x W x 2) in ndc space
-
-        :param verts:
-        :param K:
-        :param RT:
-        :param H:
-        :param W:
-        :return:
-        """
-        # FILL SCENE
-        cameras = create_camera_objects(K, RT, (H, W), self.device)
-        flame_meshes = Meshes(verts=verts, faces=self._flame.faces[None].expand(len(verts), -1, -1))
-
-        # RASTERIZING FRAGMENTS
-        if rasterized_results is not None:
-            fragments, screen_coords = rasterized_results
-        else:
-            fragments, screen_coords = self._rasterize(flame_meshes, cameras, (H, W))
-        N, H, W, K, _ = fragments.bary_coords.shape
-
-        # get semantics labels and optionally confidence
-        face_semantics = self._flame.vert_labels
-        if return_confidence:
-            face_semantics = torch.cat([face_semantics, self._blurred_vertex_labels], dim=1)
-
-        C = face_semantics.shape[-1]
-        face_semantics = face_semantics.repeat(N, 1)[flame_meshes.faces_packed()]
-        pixel_face_semantics = interpolate_face_attributes(fragments.pix_to_face, fragments.bary_coords,
-                                                           face_semantics)  # N x H x W x K x C
-
-        blend_params = BlendParams(sigma=0, gamma=0, background_color=[0.0] * C)
-        semantic_rendering = hard_feature_blend(pixel_face_semantics, fragments, blend_params)  # N x H x W x C+1
-        semantic_rendering = semantic_rendering.permute(0, 3, 1, 2)  # N x C+1 x H x W
-
-        if return_rasterizer_results:
-            return semantic_rendering, dict(fragments=fragments, screen_coords=screen_coords)
-        else:
-            return semantic_rendering  # N x C+1 x H x W
-
-    #
-    # LOSS TERMS START HERE
-    #
-    def _blur_vertex_labels(self, vert_labels, blur_iters=2):
-
-        # 1. we build the filter matrix
-        meshes = Meshes(verts=[self._flame.v_template], faces=[self._flame.faces])
-        verts = meshes.verts_packed()
-        edges = meshes.edges_packed()
-
-        V = verts.shape[0]
-        e0, e1 = edges.unbind(1)
-
-        # all neighbors
-        idx01 = torch.stack([e0, e1], dim=1)  # (E, 2)
-        idx10 = torch.stack([e1, e0], dim=1)  # (E, 2)
-
-        # and vertices themselves
-        diag_0 = torch.arange(V, device=verts.device)
-        diag = torch.stack([diag_0, diag_0], dim=0).T
-        idx = torch.cat([idx01, idx10, diag], dim=0).t()
-
-        # First, we construct the adjacency matrix including diagonal,
-        # i.e. A[i, j] = 1 if (i,j) is an edge, or
-        # A[e0, e1] = 1 &  A[e1, e0] = 1
-        ones = torch.ones(idx.shape[1], dtype=torch.float32, device=verts.device)
-        A = torch.sparse.FloatTensor(idx, ones, (V, V))
-
-        # the sum of i-th row of A gives the degree of the i-th vertex
-        deg = torch.sparse.sum(A, dim=1).to_dense()
-
-        # We construct the filter matrix by dividing by the degree
-        deg0 = 1 / deg[e0]
-        deg1 = 1 / deg[e1]
-        deg_diag = 1 / deg[diag_0]
-        val = torch.cat([deg0, deg1, deg_diag])
-        deg_mat = torch.sparse.FloatTensor(idx, val, (V, V))
-
-        for i in range(blur_iters):
-            vert_labels = deg_mat.mm(vert_labels)
-
-        return vert_labels
-
-    def _compute_laplacian_smoothing_loss(self, vertices, offset_vertices):
-        batch_faces = self._flame.faces[None, ...]
-        batch_faces = batch_faces[:, self._offset_face_indices]
-        batch_faces = batch_faces.expand(vertices.shape[0], *batch_faces.shape[1:])
-
-        basis_meshes = Meshes(verts=vertices, faces=batch_faces)
-        offset_meshes = Meshes(verts=offset_vertices, faces=batch_faces)
-
-        # compute weights
-        N = len(offset_meshes)
-        basis_verts_packed = basis_meshes.verts_packed()  # (sum(V_n), 3)
-        offset_verts_packed = offset_meshes.verts_packed()
-
-        with torch.no_grad():
-            L = basis_meshes.laplacian_packed()
-            basis_lap = L.mm(basis_verts_packed)  # .norm(dim=1)  * weights
-
-        offset_lap = L.mm(offset_verts_packed)  # .norm(dim=1)  * weights
-        diff = (offset_lap - basis_lap) ** 2
-        diff = diff.sum(dim=1)
-        diff = diff.view(N, -1)
-
-        # re-weight by body parts
-        if self._part_weights is None:
-            parts = self._flame.get_body_parts()
-            weights = self._body_part_loss_weights["lap"]
-            part_weights = torch.ones(vertices.shape[1], 1, device=self.device)
-            for part, weight in weights.items():
-                if part == "teeth":
-                    continue
-                if "ear" in part:
-                    continue
-                part_weights[parts[part]] *= weight
-            part_weights = self._blur_vertex_labels(part_weights, 3)
-            for part, weight in weights.items():
-                if "ear" in part:
-                    part_weights[parts[part]] = weight
-            self._part_weights = part_weights
-
-        diff *= self._part_weights[:, 0].view(1, -1)
-        return diff.sum() / N
-
-    def _compute_silhouette_loss(self, batch, verts, rasterized_results=None, return_iou=False):
-        gt_mask = batch["seg"]
-        K = batch["cam_intrinsic"]
-        RT = batch["cam_extrinsic"]
-        N, V, _ = verts.shape
-        H, W = gt_mask.shape[-2:]
-
-        semantics_pred, raster_res = self._render_semantics(verts, K=K, RT=RT, H=H, W=W, return_rasterizer_results=True,
-                                                            rasterized_results=rasterized_results)
-
-        pred_mask = semantics_pred[:, [-1]]
-
-        screen_coords = raster_res["screen_coords"] * (-1)  # N x H_r x W_r x 2
-
-        loss, iou = calc_holefilling_segmentation_loss(gt_mask.float(), pred_mask.float(), screen_coords,
-                                                       return_iou=True, sigma=2.0)
-
-        if return_iou:
-            return loss, iou.mean()
-        else:
-            return loss
-
-    def _compute_semantic_loss(self, batch, vertices_offsets, rasterized_results=None, return_total_iou=False):
-        """
-        calculates semantic loss for ears, eyes, mouth, and hair
-        :param batch:
-        :param vertices_offsets:
-        :param rasterized_results:
-        :return:
-        """
-        parsing_gt = batch["parsing"]
-        K = batch["cam_intrinsic"]
-        RT = batch["cam_extrinsic"]
-        H, W = batch["rgb"].shape[-2:]
-
-        # predict semantics and extract results
-        prediction, raster_res = self._render_semantics(
-            vertices_offsets,
-            K,
-            RT,
-            H,
-            W,
-            return_rasterizer_results=True,
-            rasterized_results=rasterized_results,
-            return_confidence=True,
-        )
-        screen_coords = raster_res["screen_coords"] * (-1)  # N x H_r x W_r x 2
-        semantics_pred = prediction[:, : len(self.semantic_labels)]
-        confidence = prediction[:, len(self.semantic_labels): -1]
-        alpha = prediction[:, [-1]]
-
-        # EAR SEGMENTATION
-        l_ear_index = self.semantic_labels.index("left_ear")
-        r_ear_index = self.semantic_labels.index("right_ear")
-
-        pred_ear = semantics_pred[:, [l_ear_index]] > self._semantic_thr
-        pred_ear |= semantics_pred[:, [r_ear_index]] > self._semantic_thr
-        confidence_ear = confidence[:, [l_ear_index]] + confidence[:, [r_ear_index]]
-        gt_ear = (parsing_gt == CLASS_IDCS["l_ear"]) | (parsing_gt == CLASS_IDCS["r_ear"])
-
-        loss_ear, iou_ear = calc_holefilling_segmentation_loss(
-            gt_ear.float(),
-            pred_ear.float(),
-            screen_coords,
-            return_iou=True,
-            sigma=2.0,
-            grad_weight=confidence_ear ** 10,
-        )
-
-        # EYE + MOUTH SEGMENTATION
-        trust_scores = batch["trust_semantics"]
-        # if torch.sum(valid_eyes) == 0:
-        #     loss_eye, iou_eye = 0, 1
-        # else:
-        # only do eye segmentation if gt labels can be trusted
-        l_eye_index = self.semantic_labels.index("left_eyeball")
-        r_eye_index = self.semantic_labels.index("right_eyeball")
-
-        pred_eye = semantics_pred[:, [l_eye_index]] < self._semantic_thr
-        pred_eye &= semantics_pred[:, [r_eye_index]] < self._semantic_thr
-        gt_eye = (parsing_gt != CLASS_IDCS["l_eye"]) & (parsing_gt != CLASS_IDCS["r_eye"])
-
-        loss_eye, iou_eye = calc_holefilling_segmentation_loss(
-            gt_eye.float(),
-            pred_eye.float(),
-            screen_coords,
-            return_iou=True,
-            sigma=1.0,
-            sample_weights=trust_scores,
-        )
-
-        # MOUTH SEGMENTATION
-        # only do mouth segmentation if gt labels can be trusted
-        mouth_index = self.semantic_labels.index("mouth")
-        pred_mouth = semantics_pred[:, [mouth_index]] < self._semantic_thr
-        gt_mouth = parsing_gt != CLASS_IDCS["mouth"]
-        # gt_mouth &= ( parsing_gt != CLASS_IDCS["teeth"])
-
-        loss_mouth, iou_mouth = calc_holefilling_segmentation_loss(
-            gt_mouth.float(),
-            pred_mouth.float(),
-            screen_coords,
-            return_iou=True,
-            sigma=1.0,
-            sample_weights=trust_scores,
-        )
-
-        # Hair SEGMENTATION
-        # prediction
-        scalp_pred = semantics_pred[:, [self.semantic_labels.index("scalp")]] > self._semantic_thr
-        neck_pred = semantics_pred[:, [self.semantic_labels.index("neck")]] > self._semantic_thr
-        hair_pred = scalp_pred & ~neck_pred  # hair is scalp without neck
-        skin_pred = (alpha > 0) & ~hair_pred  # skin is fg without hair
-        pred_head = torch.cat([hair_pred, skin_pred], dim=1).float()
-
-        # confidence
-        scalp_conf = confidence[:, [self.semantic_labels.index("scalp")]]
-        neck_conf = confidence[:, [self.semantic_labels.index("neck")]]
-        hair_conf = scalp_conf * (1 - neck_conf)
-        skin_conf = alpha * (1 - hair_conf)
-        confidence_head = torch.cat([hair_conf, skin_conf], dim=1)
-
-        # gt
-        hair_gt = parsing_gt == CLASS_IDCS["hair"]
-        cloth_gt = parsing_gt == CLASS_IDCS["cloth"]
-        bg_gt = parsing_gt == CLASS_IDCS["background"]
-        skin_gt = ~bg_gt & ~cloth_gt & ~hair_gt
-        gt_head = torch.cat([hair_gt, skin_gt], dim=1).float()
-
-        loss_hair, iou_hair = calc_holefilling_segmentation_loss(
-            gt_head,
-            pred_head,
-            screen_coords,
-            return_iou=True,
-            sigma=2.0,
-            grad_weight=confidence_head ** 10,
-        )
-
-        retval = [
-            [loss_ear, loss_eye, loss_mouth, loss_hair],
-            [iou_ear, iou_eye, iou_mouth, iou_hair],
-            semantics_pred,
-        ]
-        if return_total_iou:
-            retval.append(IoU(alpha > 0, ~bg_gt & ~cloth_gt))
-        return retval
-
-    ###LCX20250701修改RGB-LOSS计算函数:
-    def _compute_rgb_losses(self, batch, verts, expr, pose, mouth_conditioning, rasterized_results=None, rendered_normals=None):
-        """
-        Computes photometric and perceptual loss
-        :returns dict("rgb_loss"=scalar_rgb_loss_tensor, "perc_loss"=scalar_perc_loss_tensor)
-        """
-
-        rgb_gt = batch["rgb"]
-        mask = batch["seg"].detach()
-
-        K = batch["cam_intrinsic"]
-        RT = batch["cam_extrinsic"]
-        H, W = rgb_gt.shape[-2:]
-
-        rgba_pred, raster_dict = self._render_rgba(verts, K, RT, H, W, expr=expr, pose=pose,
-                                               mouth_cond=mouth_conditioning, rendered_normals=rendered_normals,
-                                               return_rasterizer_results=True,
-                                               rasterized_results=rasterized_results)
-
-        predicted_images = rgba_pred[:, :3]
-        predicted_seg = rgba_pred[:, [3]].detach()
-
-        screen_coords = raster_dict["screen_coords"] * (-1)
-
-        from nha.util.screen_grad import screen_grad
-        from nha.util.general import softmask_gradient, erode_mask
-        screen_colors = screen_grad(batch["rgb"], screen_coords)
-
-        # use intersection mask
-        mask = predicted_seg * mask
-        rgb_loss = self._masked_L1(predicted_images, screen_colors, mask)
-
-        ###LCX20250702DEBUGS:检查为什么感知LOSS为零。
-        if self._perceptual_loss is not None:
-            print("[NHADEBUG] About to call self._perceptual_loss!")
-            perc_loss = self._perceptual_loss(predicted_images, screen_colors.detach())
-            print("[NHADEBUG] self._perceptual_loss output:", perc_loss)
-            perc_loss = perc_loss.mean() if self.get_current_lrs_n_lossweights()["w_perc"] >= 0 else 0.0
-        else:
-            print("[NHADEBUG] self._perceptual_loss is None!")
-            perc_loss = 0.0
-            
-        # DEBUG: 打印关键张量的统计
-        #print(f"[DEBUG] predicted_images: min={predicted_images.min().item()}, max={predicted_images.max().item()}, mean={predicted_images.mean().item()}")
-        #print(f"[DEBUG] screen_colors: min={screen_colors.min().item()}, max={screen_colors.max().item()}, mean={screen_colors.mean().item()}")
-        #print(f"[DEBUG] mask: sum={mask.sum().item()}, shape={mask.shape}")
-        #print(f"[DEBUG] w_perc: {self.get_current_lrs_n_lossweights()['w_perc']} (epoch={self.current_epoch})")
-
-        # 如果需要，也可以打印perceptual loss的真实值
-        if self._perceptual_loss is not None and self.get_current_lrs_n_lossweights()['w_perc'] > 0:
-            perc_loss_value = self._perceptual_loss(predicted_images, screen_colors.detach())
-            print(f"[DEBUG] perceptual_loss value: {perc_loss_value.item() if hasattr(perc_loss_value, 'item') else perc_loss_value}")
-
-        # ATTENTION: perceptual loss only provides gradient to texture!
-        # don't apply gradient to boundary of silhouette -> artifacts occur otherwise
-        gradient_margin = int(max(H, W) / 50)
-        predicted_images = softmask_gradient(predicted_images, erode_mask(predicted_seg, gradient_margin))
-
-        if self._perceptual_loss is not None:
-            perc_loss = self._perceptual_loss(predicted_images, screen_colors.detach()).mean() if \
-                self.get_current_lrs_n_lossweights()["w_perc"] >= 0 else 0.0
-        else:
-            perc_loss = 0.0
-
-        return dict(rgb_loss=rgb_loss, perc_loss=perc_loss)
-
-    def _compute_lmk_loss(self, batch, pred_lmks):
-        lmks = batch["lmk2d"].clone()
-        # 2d landmarks origin top-left, first coordinate x, second y
-        lmks, confidence = lmks[:, :, :2], lmks[:, :, 2]
-        K = batch["cam_intrinsic"]
-        RT = batch["cam_extrinsic"]
-        rgb = batch["rgb"]
-
-        img_size = rgb.shape[-2:]
-
-        # ignore eye mid lmks
-        confidence[:, [37, 38, 43, 44, 41, 40, 47, 46]] = 0
-
-        # normalize original landmarks to image resolution
-        lmks[:, :, 0], lmks[:, :, 1] = normalize_image_points(lmks[:, :, 0], lmks[:, :, 1], img_size)
-        proj_pred_lmks = batch_project(pred_lmks, K, RT, img_size, self.device, normalize=True)
-        proj_pred_lmks, z = proj_pred_lmks[:, :, :2], proj_pred_lmks[:, :, 2]
-
-        lmk_loss = torch.norm(lmks - proj_pred_lmks, dim=2, p=1) * confidence
-        return lmk_loss[:, :68].mean()
-
-    def _compute_eye_closed_loss(self, flame_params, batch):
-
-        # left eye:  [38,42], [39,41] - 1
-        # right eye: [44,48], [45,47] -1
-        K = batch["cam_intrinsic"]
-        RT = batch["cam_extrinsic"]
-        rgb = batch["rgb"]
-        img_size = rgb.shape[-2:]
-
-        for k in flame_params.keys():
-            if k != "expr" and flame_params[k] is not None:
-                flame_params[k] = flame_params[k].detach()
-
-        _, flame_lmks = self._forward_flame(flame_params)
-
-        proj_pred_lmks = batch_project(flame_lmks, K, RT, img_size, self.device, normalize=False)
-        flame_lmks, _ = proj_pred_lmks[:, :, :2], proj_pred_lmks[:, :, 2]
-        eye_up = flame_lmks[:, [37, 38, 43, 44], :] / img_size[0]
-        eye_bottom = flame_lmks[:, [41, 40, 47, 46], :] / img_size[0]
-        pred_dist = torch.sqrt(((eye_up - eye_bottom) ** 2).sum(2) + 1e-7)  # [bz, 4]
-
-        left_dist, right_dist = batch["eye_distance"]
-        gt_dists = torch.stack([right_dist, right_dist, left_dist, left_dist], dim=1) / img_size[0]
-
-        # compare only when semantics are trusted
-        # pred_dist = pred_dist[batch['trust_semantics']]
-        # gt_dists = gt_dists[batch['trust_semantics']]
-        diff = (pred_dist - gt_dists).abs() * batch["trust_semantics"].view(-1, 1)
-        return diff.sum() / len(flame_lmks)
-
-    def _compute_flame_reg_losses(self, batch):
-        indices = torch.unique(batch["frame"])
-        shape_reg = torch.sum(self._shape ** 2) / 2
-        expr_reg = torch.sum(self._expr[indices] ** 2) / 2
-        pose = torch.cat([self._neck_pose[indices], self._jaw_pose[indices], self._eyes_pose[indices]], dim=1)
-        pose_reg = torch.sum(pose ** 2) / 2
-        return shape_reg, expr_reg, pose_reg
-
-    def _get_normal_mask(self, batch):
-        """
-        Creates normal mask by combining groundtruth normal mask and face parsing mask
-        :param batch:
-        :return: normal mask
-        """
-
-        N, _, H, W = batch["rgb"].shape
-        parsing = batch["parsing"]
-        relevant_idcs = [
-            CLASS_IDCS["skin"],
-            CLASS_IDCS["nose"],
-            # CLASS_IDCS["l_eye"],
-            # CLASS_IDCS["r_eye"],
-            CLASS_IDCS["l_brow"],
-            CLASS_IDCS["r_brow"],
-            CLASS_IDCS["u_lip"],
-            CLASS_IDCS["l_lip"],
-        ]
-
-        gt_normals = batch["normal"]
-        gt_normal_mask = torch.any((gt_normals.abs() > 0.004), dim=1).float().unsqueeze(1)
-        gt_normal_mask = erode_mask(gt_normal_mask, int(max(H, W) / 50))
-
-        mask = torch.zeros(N, 1, H, W, device=self.device).bool()
-        for idx in relevant_idcs:
-            mask = mask | (parsing == idx)
-        return mask.float() * gt_normal_mask
-
-    def _compute_normal_loss(self, batch, vertices_offsets, rendered_semantics, rasterized_results=None,
-                             return_normal_pred=False):
-        """
-
-        :param batch:
-        :param vertices_offsets:
-        :param rendered_semantics: tensor of shape N x C x H x W with rendered semantics of mesh
-        :param rasterized_results:
-        :return:
-        """
-
-        normal_gt = batch["normal"]
-        N, _3, H, W = normal_gt.shape
-        # normal_gt[:, :2] = -1 * normal_gt[:, :2]  # mirroring gt normals
-
-        mask = self._get_normal_mask(batch)
-        K = batch["cam_intrinsic"]
-        RT = batch["cam_extrinsic"]
-
-        normal_pred, raster_res = self._render_normals(vertices_offsets, K, RT, H, W, return_rasterizer_results=True,
-                                                       rasterized_results=rasterized_results)
-
-        normal_pred, seg_pred = normal_pred[:, :3], normal_pred[:, [3]]
-
-        # compute the intersection with the rendered mask
-        mask = mask * seg_pred
-
-        # excluding specific mesh regions
-        mask = mask * (rendered_semantics[:, [self.semantic_labels.index("mouth")]] < 0.1).float()
-        mask *= (rendered_semantics[:, [self.semantic_labels.index("left_eyeball")]] < 0.1).float()
-        mask *= (rendered_semantics[:, [self.semantic_labels.index("right_eyeball")]] < 0.1).float()
-
-        valid_eyes = batch["trust_semantics"] > 0.5
-        if torch.sum(~valid_eyes) > 0:
-            l_eyeregion = rendered_semantics[:, [self.semantic_labels.index("left_eye_region")]]
-            mask[~valid_eyes] *= (l_eyeregion < 0.1).float()[~valid_eyes]
-            r_eyeregion = rendered_semantics[:, [self.semantic_labels.index("right_eye_region")]]
-            mask[~valid_eyes] *= (r_eyeregion < 0.1).float()[~valid_eyes]
-
-        # calculating normal laplacians
-        sigma = max(H, W) / 50
-        with torch.no_grad():
-            blurred_normal_gt = masked_gaussian_blur(normal_gt.detach(), mask, sigma=sigma, kernel_size=None,
-                                                     blur_fc=seperated_gaussian_blur)
-            blurred_normal_pred = masked_gaussian_blur(normal_pred.detach(), mask, sigma=sigma, kernel_size=None,
-                                                       blur_fc=seperated_gaussian_blur)
-
-        normal_gt_lapl = normal_gt - blurred_normal_gt
-        normal_pred_lapl = normal_pred - blurred_normal_pred
-
-        # shape [N, H, W, 2]
-        screen_coords = raster_res["screen_coords"] * (-1)
-
-        normal_gt_lapl = screen_grad(normal_gt_lapl, screen_coords)
-
-        loss = self._masked_L1(normal_gt_lapl, normal_pred_lapl, mask=mask)
-
-        if return_normal_pred:
-            return loss, normal_pred
-        else:
-            return loss
-        # return self._masked_L1(normal_gt, normal_pred, mask=mask)
-
-    def _compute_surface_consistency(self, offsets):
-
-        N = len(offsets)
-
-        if N == 1:
-            return 0
-
-        # offsets = offsets.view(N, -1)
-
-        # for each frame select another frame and compare their offsets
-        all_indices = list(range(N))
-        possible_partners = [all_indices[:i] + all_indices[i + 1:] for i in all_indices]
-        partner_indices = [np.random.choice(p) for p in possible_partners]
-
-        frame_i_offsets = offsets
-        frame_j_offsets = offsets[partner_indices]
-
-        diff = torch.abs(frame_i_offsets - frame_j_offsets.detach())
-
-        return diff.sum() / N
-
-    def _compute_edge_length_loss(self, offset_vertices):
-
-        if self._edge_mask is None:
-            # compute edge mask that later limits the calculation to scalp vertices only
-            meshes = Meshes(verts=[self._flame.v_template], faces=[self._flame.faces])
-            edges_packed = meshes.edges_packed()
-            bp = self._flame.get_body_parts()
-            mask = torch.zeros_like(edges_packed).bool()
-            for i in bp["scalp"]:
-                mask |= edges_packed == i
-
-            self._edge_mask = mask.sum(dim=1) > 0
-
-        batch_faces = self._flame.faces[None, ...]
-        batch_faces = batch_faces.expand(offset_vertices.shape[0], *batch_faces.shape[1:])
-        meshes = Meshes(verts=offset_vertices, faces=batch_faces)
-
-        N = len(meshes)
-        edges_packed = meshes.edges_packed()  # (sum(E_n), 2)
-        verts_packed = meshes.verts_packed()  # (sum(V_n), 3)
-
-        verts_edges = verts_packed[edges_packed]
-        v0, v1 = verts_edges.unbind(1)
-        lengths = (v0 - v1).norm(dim=1, p=2)
-
-        # add batch dimension and filter scalp edges
-        lengths = lengths.view(N, -1)[:, self._edge_mask]
-        mean_lengths = torch.mean(lengths, dim=1, keepdim=True).expand(lengths.shape).detach()
-        deviation = torch.abs(lengths - mean_lengths)
-
-        # calculate loss only when larger than 3x mean
-        deviation[deviation < 1.5 * mean_lengths] *= 0
-        return deviation.mean()
-
-    def _optimize_offsets(self, batch):
-        """
-        Optimize the Flame head model + offets based on silhouette, normal map and semantic map
-
-        :param batch: input data batch as returned from self.prepare_batch()
-        :return: scalar loss, log dict
-        """
-
-        # get loss term weights
-        w_lap = self._decays["lap"].get(self.current_epoch)
-        w_semantic_hair = self._decays["semantic"].get(self.current_epoch)
-        w_silh = self._decays["silh"].get(self.current_epoch)
-
-        # computes losses
-        flame_params = self._create_flame_param_batch(batch, ignore_offsets=True)
-        vertices, _ = self._forward_flame(flame_params)
-
-        flame_params_offsets = self._create_flame_param_batch(batch)
-        offsets_verts, pred_lmks = self._forward_flame(flame_params_offsets)
-
-        # precompute rasterization results to safe computation time
-        raster_res = self._rasterize_flame(batch, offsets_verts)
-
-        silh_loss = self._compute_silhouette_loss(batch, offsets_verts, rasterized_results=raster_res)
-
-        sem_res = self._compute_semantic_loss(batch, offsets_verts, rasterized_results=raster_res,
-                                              return_total_iou=True)
-        semantic_loss, semantic_iou, semantic_pred, total_iou = sem_res
-        sem_ear, sem_eye, sem_mouth, sem_hair = semantic_loss
-        iou_ear, iou_eye, iou_mouth, iou_hair = semantic_iou
-
-        lap_loss = self._compute_laplacian_smoothing_loss(vertices, offsets_verts)
-
-        normal_loss = self._compute_normal_loss(
-            batch,
-            offsets_verts,
-            rendered_semantics=semantic_pred,
-            rasterized_results=raster_res,
-        )
-
-        lmk_loss = self._compute_lmk_loss(batch, pred_lmks)
-
-        eye_closed_loss = self._compute_eye_closed_loss(copy(flame_params), batch)
-
-        surface_reg = self._compute_surface_consistency(flame_params_offsets["offsets"])
-
-        edge_loss = self._compute_edge_length_loss(offsets_verts)
-        shape_reg, expr_reg, pose_reg = self._compute_flame_reg_losses(batch)
-
-        loss_weights = self.get_current_lrs_n_lossweights()
-
-        total_loss = loss_weights["w_norm"] * normal_loss + loss_weights["w_lap"] * lap_loss + \
-                     loss_weights["w_silh"] * silh_loss + loss_weights["w_edge"] * edge_loss + \
-                     loss_weights["w_lmk"] * lmk_loss + loss_weights["w_eye_closed"] * eye_closed_loss + \
-                     loss_weights["w_shape_reg"] * shape_reg + loss_weights["w_expr_reg"] * expr_reg + \
-                     loss_weights["w_pose_reg"] * pose_reg + loss_weights["w_surface_reg"] * surface_reg + \
-                     loss_weights["w_semantic_ear"] * sem_ear + loss_weights["w_semantic_mouth"] * sem_mouth + \
-                     loss_weights["w_semantic_hair"] * sem_hair + loss_weights["w_semantic_eye"] * sem_eye
-
-        log_dict = {
-            "lap_loss": lap_loss,
-            "edge_loss": edge_loss,
-            "lmk_loss": lmk_loss,
-            "eye_closed_loss": eye_closed_loss,
-            "norm_loss": normal_loss,
-            "silh_loss": silh_loss,
-            "shape_reg": shape_reg,
-            "expr_reg": expr_reg,
-            "pose_reg": pose_reg,
-            "surface_reg": surface_reg,
-            "iou": total_iou,
-            "semantic_loss_ear": sem_ear,
-            "semantic_iou_ear": iou_ear,
-            "semantic_loss_eye": sem_eye,
-            "semantic_iou_eye": iou_eye,
-            "semantic_loss_mouth": sem_mouth,
-            "semantic_iou_mouth": iou_mouth,
-            "semantic_loss_hair": sem_hair,
-            "semantic_iou_hair": iou_hair,
-            "total_loss": total_loss,
-        }
-
-        for k, v in self._decays.items():
-            decay = v.get(self.current_epoch)
-            log_dict[f"decay_{k}"] = decay
-
-        return total_loss, log_dict
-
-    def _add_noise_to_flame_params(self, flame_params):
-        """
-        INPLACE noise adding to flame params 'rotation' 'neck' 'jaw' 'expr'
-        :param flame_params: dict returned by self._create_flame_param_batch
-        :return: dict with same structure as input but with parameter-specific noise added
-        """
-        noise_multiplier = dict(
-            rotation=self.hparams["glob_rot_noise"] / 180 * np.pi,
-            eyes=15.0 / 180 * np.pi,
-            neck=0.15,
-            jaw=0.2,
-            expr=1.0,
-        )
-
-        for key in noise_multiplier:
-            noise = torch.randn_like(flame_params[key]) * noise_multiplier[key] * self.hparams["flame_noise"]
-            flame_params[key] = flame_params[key] + noise
-
-        return flame_params
-
-    def _optimize_texture(self, batch):
-
-        # construct mesh
-        flame_params_offsets = self._create_flame_param_batch(batch)
-        offsets_verts, _ = self._forward_flame(flame_params_offsets)
-
-        # produce noisy flame parameters for conditioning the texture (generalizes better)
-        flame_params_offsets_detached = dict()
-        for key, val in flame_params_offsets.items():
-            flame_params_offsets_detached[key] = val.detach()
-        flame_params_noise = self._add_noise_to_flame_params(flame_params_offsets_detached)
-        _, _, mouth_conditioning = self._forward_flame(flame_params_noise, return_mouth_conditioning=True)
-        expr = flame_params_noise["expr"]
-        pose = torch.cat(
-            (
-                flame_params_noise["rotation"],
-                flame_params_noise["neck"],
-                flame_params_noise["jaw"],
-                flame_params_noise["eyes"],
-            ),
-            dim=1,
-        )
-
-        phot_lossdict = self._compute_rgb_losses(
-            batch,
-            offsets_verts,
-            expr=expr,
-            pose=pose,
-            mouth_conditioning=mouth_conditioning,
-        )
-        rgb_loss = phot_lossdict["rgb_loss"]
-        perc_loss = phot_lossdict["perc_loss"]
-
-        weights = self.get_current_lrs_n_lossweights()
-
-        total_loss = weights["w_rgb"] * rgb_loss + weights["w_perc"] * perc_loss
-
-        log_dict = {
-            "rgb_loss": rgb_loss,
-            "perc_loss": perc_loss,
-            "total_loss": total_loss,
-        }
-
-        for k, v in self._decays.items():
-            decay = v.get(self.current_epoch)
-            log_dict[f"decay_{k}"] = decay
-
-        return total_loss, log_dict
-
-    def _optimize_jointly(self, batch):
-
-        # construct mesh
-        flame_params = self._create_flame_param_batch(batch, ignore_offsets=True)
-        vertices, _ = self._forward_flame(flame_params)
-        flame_params_offsets = self._create_flame_param_batch(batch)
-        offsets_verts, pred_lmks = self._forward_flame(flame_params_offsets)
-        raster_res = self._rasterize_flame(batch, offsets_verts)
-
-        # produce noisy flame parameters for conditioning the texture (generalizes better)
-        flame_params_offsets_detached = dict()
-        for key, val in flame_params_offsets.items():
-            flame_params_offsets_detached[key] = val.detach()
-        flame_params_noise = self._add_noise_to_flame_params(flame_params_offsets_detached)
-        _, _, mouth_conditioning = self._forward_flame(flame_params_noise, return_mouth_conditioning=True)
-
-        expr = flame_params_noise["expr"]
-        pose = torch.cat(
-            (
-                flame_params_noise["rotation"],
-                flame_params_noise["neck"],
-                flame_params_noise["jaw"],
-                flame_params_noise["eyes"],
-            ),
-            dim=1,
-        )
-
-        # calculating losses
-        sem_res = self._compute_semantic_loss(batch, offsets_verts, rasterized_results=raster_res,
-                                              return_total_iou=True)
-        semantic_loss, semantic_iou, semantic_pred, total_iou = sem_res
-        sem_ear, sem_eye, sem_mouth, sem_hair = semantic_loss
-        iou_ear, iou_eye, iou_mouth, iou_hair = semantic_iou
-
-        normal_loss, rendered_normals = self._compute_normal_loss(
-            batch,
-            offsets_verts,
-            return_normal_pred=True,
-            rendered_semantics=semantic_pred,
-            rasterized_results=raster_res,
-        )
-
-        phot_lossdict = self._compute_rgb_losses(
-            batch,
-            offsets_verts,
-            expr=expr,
-            pose=pose,
-            mouth_conditioning=mouth_conditioning,
-        )
-
-        rgb_loss = phot_lossdict["rgb_loss"]
-        perc_loss = phot_lossdict["perc_loss"]
-
-        silh_loss = self._compute_silhouette_loss(batch, offsets_verts, rasterized_results=raster_res)
-
-        eye_closed_loss = self._compute_eye_closed_loss(copy(flame_params), batch)
-
-        edge_loss = self._compute_edge_length_loss(offsets_verts)
-        lmk_loss = self._compute_lmk_loss(batch, pred_lmks)
-
-        # regularization terms
-        lap_loss = self._compute_laplacian_smoothing_loss(vertices, offsets_verts)
-        surface_reg = self._compute_surface_consistency(flame_params_offsets["offsets"])
-        shape_reg, expr_reg, pose_reg = self._compute_flame_reg_losses(batch)
-
-        weights = self.get_current_lrs_n_lossweights()
-
-        total_loss = weights["w_rgb"] * rgb_loss + weights["w_silh"] * silh_loss + \
-                     weights["w_semantic_ear"] * sem_ear + weights["w_semantic_eye"] * sem_eye + \
-                     weights["w_semantic_mouth"] * sem_mouth + weights["w_semantic_hair"] * sem_hair + \
-                     weights["w_edge"] * edge_loss + weights["w_norm"] * normal_loss + weights["w_lap"] * lap_loss + \
-                     weights["w_lmk"] * lmk_loss + weights["w_eye_closed"] * eye_closed_loss + \
-                     weights["w_perc"] * perc_loss + weights["w_shape_reg"] * shape_reg + \
-                     weights["w_surface_reg"] * surface_reg + weights["w_expr_reg"] * expr_reg + \
-                     weights["w_pose_reg"] * pose_reg
-
-        log_dict = {
-            "rgb_loss": rgb_loss,
-            "silh_loss": silh_loss,
-            "norm_loss": normal_loss,
-            "perc_loss": perc_loss,
-            "lap_loss": lap_loss,
-            "edge_loss": edge_loss,
-            "lmk_loss": lmk_loss,
-            "eye_closed_loss": eye_closed_loss,
-            "shape_reg": shape_reg,
-            "expr_reg": expr_reg,
-            "surface_reg": surface_reg,
-            "pose_reg": pose_reg,
-            "iou": total_iou,
-            "semantic_loss_ear": sem_ear,
-            "semantic_iou_ear": iou_ear,
-            "semantic_loss_eye": sem_eye,
-            "semantic_iou_eye": iou_eye,
-            "semantic_loss_mouth": sem_mouth,
-            "semantic_iou_mouth": iou_mouth,
-            "semantic_loss_hair": sem_hair,
-            "semantic_iou_hair": iou_hair,
-            "total_loss": total_loss,
-        }
-
-        for k, v in self._decays.items():
-            decay = v.get(self.current_epoch)
-            log_dict[f"decay_{k}"] = decay
-
-        return total_loss, log_dict
-
-    @torch.no_grad()
-    def prepare_batch(self, batch):
-        """
-        prepares data obtained from dataloaders before they can be processed by NHAOptimizer during training. Not
-        needed at inference time. Brings fg/bg segmentation map into right format, fills gt rgb image background with
-        white, filters out noisy segmentations
-
-        :param batch: data batch as provided from dataloader of RealDataModule.train_dataloader() in real.py
-        :return: data batch dict
-        """
-
-        # 仅当启用了分割功能时才处理分割图像：LCX20250611
-        if self.hparams.get("load_seg", False):
-            batch["seg"] = digitize_segmap(batch["seg"])
-            batch["seg"] = batch["seg"].float()
-            batch["rgb"] = fill_tensor_background(batch["rgb"], batch["seg"])
-        else:
-            # 当未启用分割功能时，创建一个全1的掩码:LCX20250611
-            N, C, H, W = batch["rgb"].shape
-            batch["seg"] = torch.ones((N, 1, H, W), dtype=torch.float32, device=batch["rgb"].device)
-
-        if "lmk2d_iris" in batch:
-            batch["lmk2d"] = torch.cat([batch["lmk2d"], batch["lmk2d_iris"]], dim=1)
-
-        # decide if the segmentation maps can be trusted --> they are noisy for profile views
-        # trust segmentation only up to 30 degrees away from front view
-        gaze = torch.tensor([0, 0, -1.0], device=self.device)
-        pose = batch["flame_pose"]
-        global_rot = pose[:, :3]
-        neck = self._flame._apply_rotation_limit(pose[:, 3:6], self._flame.neck_limits)
-        B = len(neck)
-        mats = batch_rodrigues(torch.cat([global_rot, neck], dim=0))
-        gaze = mats[:B] @ mats[B:] @ gaze.view(3, 1)
-
-        azi = torch.atan2(gaze[:, 2], gaze[:, 0]) / np.pi * 180
-        azi -= 90  # zero centered
-        azi_trust = torch.sigmoid(30 - torch.abs(azi))
-
-        # elevation must be in range -np.pi/2 to np.pi/2
-        ele = (torch.arccos(gaze[:, 1]) - np.pi / 2) / np.pi * 180
-        ele_trust = torch.sigmoid(20 - torch.abs(ele))
-
-        # trust = (azi > 60) & (azi < 120) & (ele > -20) & (ele < 20)
-        trust = ele_trust * azi_trust
-        batch["trust_semantics"] = trust.view(-1)
-        return batch
-    ### LCX:在入口参数里，新增第3个：OPT-IDX=NONE
-    def toggle_optimizer(self, optimizer, opt_idx=None):
-        pass  # 使用空实现，因为我们不需要特殊的优化器切换逻辑
-
-    def untoggle_optimizer(self):
-        for param, requires_grad in self._param_requires_grad_state.items():
-            param.requires_grad = requires_grad
-
-        # save memory
-        self._param_requires_grad_state = dict()
-
-    def step(self, batch, batch_idx, stage="train"):
-        """
-        执行一个训练/验证步骤
-    
-        Args:
-            batch: 输入数据批次
-            batch_idx: 批次索引
-            stage: 阶段标识符 ("train" 或 "val")
-        
-        Returns:
-            dict: 包含损失、输出和其他必要信息的字典
-        """
-        # 获取当前优化器
-        optim = self._get_current_optimizer()
-    
-        # 训练阶段且为手动优化模式时，清除梯度
-        if stage == "train" and not self.automatic_optimization:
-            optim.zero_grad()
-    
-        # 前向传播
-        outputs = self.forward(batch)
-    
-        # 计算损失
-        losses = self.compute_loss(outputs, batch)
-        total_loss = losses.get('total_loss', sum(losses.values()))
-    
-        # 训练阶段且为手动优化模式时，执行反向传播和优化器步进
-        if stage == "train" and not self.automatic_optimization:
-            self.manual_backward(total_loss)
-            optim.step()
-    
-        # 记录损失
-        for name, value in losses.items():
-            self.log(
-                f"{stage}_{name}",
-                value,
-                on_step=True,
-                on_epoch=True,
-                prog_bar=True,
-                sync_dist=True
-            )
-    
-        return {   "loss": total_loss,  "outputs": outputs, "losses": losses  }
-    
-    ### def training_step(self, batch, batch_idx, optimizer_idx=None):
-    ### LCX:删掉OPTMIZER_IDX。在 PyTorch Lightning 2.x 版本，自动优化模式下不允许这样写，如果只有一个优化器，这个参数必须去掉。
-    def training_step(self, batch, batch_idx):
-        self.is_train = True
-        self.fit_residuals = False
-        self.prepare_batch(batch)
-    
-        # 执行训练步骤
-        ret = self.step(batch, batch_idx, stage="train")
-    
-        self.is_train = False
-        return ret
-
-    def validation_step(self, batch, batch_idx, **kwargs):
-        self.fit_residuals = self.current_epoch < self.hparams["epochs_offset"] or self.current_epoch >= self.hparams[
-            "epochs_texture"] + self.hparams["epochs_offset"]
-        batch = self.prepare_batch(batch)
-
-        with torch.set_grad_enabled(self.fit_residuals):
-            self.step(batch, batch_idx, stage="val")
-        self.fit_residuals = False
-
-    @torch.no_grad()
-    def _visualize_head(self, batch, max_samples=5, title=f"flame_fit"):
-        rgba_pred = self.forward(batch, symmetric_rgb_range=False)
-        shaded_pred = self.predict_shaded_mesh(batch)
-
-        N = min(max_samples, batch["rgb"].shape[0])
-
-        rgb_gt = batch["rgb"]
-        rgb_gt = rgb_gt[:N] * 0.5 + 0.5
-        rgb_pred = rgba_pred[:N, :3]
-        shaded_pred = shaded_pred[:N, :3]
-
-        images = torch.cat([rgb_gt, rgb_pred, shaded_pred], dim=0)
-        log_img = torchvision.utils.make_grid(images, nrow=N)
-        self.logger.experiment.add_image(title + "prediction", log_img, self.current_epoch)
-
-    def forward(self, batch, ignore_expr=False, ignore_pose=False, center_prediction=False, symmetric_rgb_range=True):
-        """
-        前向传播方法。
-    
-        Args:
-            batch: 输入数据批次
-            ignore_expr: 是否忽略表情参数
-            ignore_pose: 是否忽略姿态参数
-            center_prediction: 是否居中预测
-            symmetric_rgb_range: 如果为True，RGB值范围为-1到1；否则为0到1
-        
-        Returns:
-            dict: 包含所有必要输出的字典
-        """
-        # 创建FLAME参数
-        flame_params_offsets = self._create_flame_param_batch(batch, ignore_expr=ignore_expr, ignore_pose=ignore_pose)
-    
-        # 计算顶点、关键点和嘴部调节参数
-        offsets_verts, pred_lmks, mouth_conditioning = self._forward_flame( flame_params_offsets,  return_mouth_conditioning=True )
-    
-        # 获取表情和姿态参数
-        expr = flame_params_offsets["expr"]
-        pose = torch.cat((
-            flame_params_offsets["rotation"],
-            flame_params_offsets["neck"],
-            flame_params_offsets["jaw"],
-            flame_params_offsets["eyes"]
-        ), dim=1)
-    
-        # 渲染RGBA预测
-        K = batch["cam_intrinsic"]
-        RT = batch["cam_extrinsic"]
-        H, W = batch["rgb"].shape[-2:]
-    
-        rgba_pred = self._render_rgba(
-            offsets_verts, K, RT, H, W,
-            expr=expr,
-            pose=pose,
-            mouth_cond=mouth_conditioning,
-            center_prediction=center_prediction
-        )
-    
-        # 调整RGB值范围
-        if not symmetric_rgb_range:
-            rgba_pred[:, :3] = torch.clip(rgba_pred[:, :3] * 0.5 + 0.5, min=0.0, max=1.0)
-    
-        # 返回包含所有必要信息的输出字典
-        outputs = {
-            'rgba_pred': rgba_pred,
-            'vertices': offsets_verts,
-            'landmarks': pred_lmks,
-            'flame_params': flame_params_offsets,
-            'mouth_conditioning': mouth_conditioning,
-            'expr': expr,
-            'pose': pose
-        }
-    
-        return outputs
-
-    @torch.no_grad()
-    def predict_reenaction(self, batch, driving_model, base_target_params, base_driving_params, return_alpha=False):
-
-        K = batch["cam_intrinsic"]
-        RT = batch["cam_extrinsic"]
-        N, C, H, W = batch["rgb"].shape
-
-        # OBTAINING FLAME PARAMS
-        flame_params_offsets = self._create_flame_param_batch(batch)
-
-        # insert correct shape parameters
-        flame_params_offsets["shape"] = base_target_params["shape"].expand(N, -1)
-
-        # adopt driving frame parameters
-        flame_params_driving = driving_model._create_flame_param_batch(batch)
-        for key in ["expr", "translation", "rotation", "neck", "jaw", "eyes"]:
-            residual_param = flame_params_driving[key] - base_driving_params[key].expand(N, -1)
-            flame_params_offsets[key] = base_target_params[key].expand(N, -1) + residual_param
-
-        offsets_verts, _, mouth_conditioning = self._forward_flame(flame_params_offsets, return_mouth_conditioning=True)
-
-        # rgba prediction
-        expr = flame_params_offsets["expr"]
-        pose = torch.cat((flame_params_offsets["rotation"], flame_params_offsets["neck"], flame_params_offsets["jaw"],
-                          flame_params_offsets["eyes"]), dim=1)
-
-        rgba_pred = self._render_rgba(offsets_verts, K, RT, H, W, expr=expr, pose=pose, mouth_cond=mouth_conditioning)
-
-        rgb_pred, seg_pred = rgba_pred[:, :3], rgba_pred[:, 3:]
-
-        # rgb pred logging
-        # rgb_pred.permute(0, 2, 3, 1)[seg_pred[:, 0] < .5] = 1  # change background to white  NOT NECESSARY
-        rgb_pred = torch.clip(rgb_pred * 0.5 + 0.5, min=0, max=1)
-        if return_alpha:
-            return rgb_pred, seg_pred
-        else:
-            return rgb_pred
-
-    @torch.no_grad()
-    def predict_shaded_mesh(self, batch, tex_color=np.array((188, 204, 245)) / 255, light_colors=(0.4, 0.6, 0.3)):
-        K = batch["cam_intrinsic"]
-        RT = batch["cam_extrinsic"]
-        H, W = batch["rgb"].shape[-2:]
-
-        flame_params_offsets = self._create_flame_param_batch(batch)
-        offsets_verts, _ = self._forward_flame(flame_params_offsets)
-
-        vertex_colors = torch.ones_like(offsets_verts) * torch.tensor(tex_color, device=self.device).float().view(1, 3)
-        # define meshes and textures
-        tex = TexturesVertex(vertex_colors)
-        mesh = Meshes(
-            verts=offsets_verts,
-            faces=self._flame.faces[None].expand(len(offsets_verts), -1, -1),
-            textures=tex,
-        )
-
-        return render_shaded_mesh(mesh, K, RT, (H, W), self.device, light_colors)
-
-    def get_current_lrs_n_lossweights(self):
-        epoch = self.current_epoch
-
-        if epoch < self.hparams["epochs_offset"]:
-            i = 0
-
-        elif epoch < self.hparams["epochs_offset"] + self.hparams["epochs_texture"]:
-            i = 1
-
-        else:
-            i = 2
-
-        return dict(
-            w_rgb=self.hparams["w_rgb"][i],
-            w_perc=self.hparams["w_perc"][i],
-            w_norm=self.hparams["w_norm"][i],
-            w_edge=self.hparams["w_edge"][i],
-            w_eye_closed=self.hparams["w_eye_closed"][i],
-            w_semantic_ear=self.hparams["w_semantic_ear"][i],
-            w_semantic_eye=self.hparams["w_semantic_eye"][i],
-            w_semantic_mouth=self.hparams["w_semantic_mouth"][i],
-            w_semantic_hair=self._decays["semantic"].get(epoch),
-            w_silh=self._decays["silh"].get(epoch),
-            w_lap=self._decays["lap"].get(epoch),
-            w_surface_reg=self.hparams["w_surface_reg"][i],
-            w_lmk=self.hparams["w_lmk"][i],
-            w_shape_reg=self.hparams["w_shape_reg"][i],
-            w_expr_reg=self.hparams["w_expr_reg"][i],
-            w_pose_reg=self.hparams["w_pose_reg"][i],
-            texture_weight_decay=self.hparams["texture_weight_decay"][i],
-            flame_lr=self.hparams["flame_lr"][i],
-            offset_lr=self.hparams["offset_lr"][i],
-            tex_lr=self.hparams["tex_lr"][i],
-            trans_lr=self._trans_lr[i],
-        )
+        logger.info(f"Switched to stage: {self._current_stage}")
+        # Additional stage-specific setup if needed
 
     def configure_optimizers(self):
-        # 获取学习率
-        flame_lr = self.hparams.get("flame_lr", [1e-4])[0]
-        mlp_lr = self.hparams.get("mlp_lr", flame_lr)
-        texture_lr = self.hparams.get("texture_lr", flame_lr)
-        trans_lr = self._trans_lr[0] if hasattr(self, '_trans_lr') else flame_lr
-    
-        # 创建6个优化器
-        optimizers = [
-            torch.optim.Adam([  # FLAME优化器
-                {'params': self._shape, 'lr': flame_lr},
-                {'params': self._expr, 'lr': flame_lr},
-                {'params': self._neck_pose, 'lr': flame_lr},
-                {'params': self._jaw_pose, 'lr': flame_lr},
-                {'params': self._eyes_pose, 'lr': flame_lr},
-                {'params': self._translation, 'lr': trans_lr},
-                {'params': self._rotation, 'lr': flame_lr},
-            ]),
-            torch.optim.Adam([  # 偏移优化器
-                {'params': self._vert_feats, 'lr': mlp_lr},
-                {'params': self._offset_mlp.parameters(), 'lr': mlp_lr},
-            ]),
-            torch.optim.Adam([  # 纹理优化器
-                {'params': self._texture.parameters(), 'lr': texture_lr},
-                {'params': self._explFeatures.parameters(), 'lr': texture_lr},
-            ]),
-            torch.optim.Adam([  # 联合FLAME优化器
-                {'params': self._shape, 'lr': flame_lr},
-                {'params': self._expr, 'lr': flame_lr},
-                {'params': self._neck_pose, 'lr': flame_lr},
-                {'params': self._jaw_pose, 'lr': flame_lr},
-                {'params': self._eyes_pose, 'lr': flame_lr},
-                {'params': self._translation, 'lr': trans_lr},
-                {'params': self._rotation, 'lr': flame_lr},
-            ]),
-            torch.optim.Adam([  # 偏移残差优化器
-                {'params': self._vert_feats, 'lr': mlp_lr},
-            ]),
-            torch.optim.Adam([  # 所有残差优化器
-                {'params': self._vert_feats, 'lr': mlp_lr},
-                {'params': self._texture.parameters(), 'lr': texture_lr},
-                {'params': self._explFeatures.parameters(), 'lr': texture_lr},
-            ])
-        ]
-        return optimizers
-        
-    def compute_loss(self, outputs, batch):
-        """
-        计算损失函数。根据当前训练阶段选择合适的损失计算函数。
-    
-        Args:
-            outputs: forward方法的输出，包含预测结果
-            batch: 输入数据批次
-        
-        Returns:
-            dict: 包含各种损失值的字典
-        """
-        # 确保 current_stage 已经被正确初始化
-        if not hasattr(self, '_current_stage'):
-            self._current_stage = "flame"
-        
-        # 根据当前阶段选择合适的损失计算函数
-        if self._current_stage == "flame":
-            # FLAME优化
-            total_loss, log_dict = self._optimize_offsets(batch)
-        elif self._current_stage == "texture":
-            # 纹理优化
-            total_loss, log_dict = self._optimize_texture(batch)
-        elif self._current_stage == "joint_flame":
-            # 联合优化
-            total_loss, log_dict = self._optimize_jointly(batch)
-        elif self._current_stage == "offset":
-            # 偏移优化
-            total_loss, log_dict = self._optimize_offsets(batch)
-        elif self._current_stage == "off_resid":
-            # 偏移残差优化
-            total_loss, log_dict = self._optimize_offsets(batch)
-        elif self._current_stage == "all_resid":
-            # 所有残差优化
-            total_loss, log_dict = self._optimize_jointly(batch)
-        else:
-            # 默认使用偏移优化
-            total_loss, log_dict = self._optimize_offsets(batch)
-    
-        # 确保返回字典中包含total_loss
-        if 'total_loss' not in log_dict:
-            log_dict['total_loss'] = total_loss
-        
-        return log_dict
+        # Configure optimizers based on the current stage
+        optimizers = []
+        schedulers = []
 
-    def on_fit_start(self):
-        # resume后自动补加载perceptual loss
-        if getattr(self, "_perceptual_loss", None) is None:
-            try:
-                from nha.util.general import NoSubmoduleWrapper
-                from nha.optimization.perceptual_loss import ResNetLOSS
-                self._perceptual_loss = NoSubmoduleWrapper(ResNetLOSS())
-                if self._perceptual_loss is not None:
-                    self._perceptual_loss = self._perceptual_loss.to(self.device)
-                print("[LCX-DEBUG] perceptual loss loaded successfully in on_fit_start!")
-            except Exception as e:
-                print("[LCX-DEBUG] Failed to load perceptual loss network in on_fit_start:", e)
-                self._perceptual_loss = None
-                
+        if self._current_stage == "flame":
+            flame_params = [
+                {"params": self._shape, "lr": self.hparams["flame_lr"][0]},
+                {"params": self._expr, "lr": self.hparams["flame_lr"][0]},
+                {"params": self._neck_pose, "lr": self.hparams["flame_lr"][0]},
+                {"params": self._jaw_pose, "lr": self.hparams["flame_lr"][0]},
+                {"params": self._eyes_pose, "lr": self.hparams["flame_lr"][0]},
+                {"params": self._translation, "lr": self._trans_lr[0]},
+                {"params": self._rotation, "lr": self.hparams["flame_lr"][0]},
+            ]
+            offset_params = [
+                {"params": self._offset_mlp.parameters(), "lr": self.hparams["offset_lr"][0]},
+                {"params": self._vert_feats, "lr": self.hparams["offset_lr"][0]},
+            ]
+            optimizers.append(torch.optim.Adam(flame_params + offset_params))
+
+        elif self._current_stage == "texture":
+            texture_params = [
+                {"params": self._texture.parameters(), "lr": self.hparams["tex_lr"][1]},
+                {"params": self._explFeatures.parameters(), "lr": self.hparams["tex_lr"][1], "weight_decay": self.hparams["texture_weight_decay"][1]},
+                {"params": self._normal_encoder.parameters(), "lr": self.hparams["tex_lr"][1]},
+            ]
+            optimizers.append(torch.optim.Adam(texture_params))
+
+        elif self._current_stage == "joint_flame":
+            flame_params = [
+                {"params": self._shape, "lr": self.hparams["flame_lr"][2]},
+                {"params": self._expr, "lr": self.hparams["flame_lr"][2]},
+                {"params": self._neck_pose, "lr": self.hparams["flame_lr"][2]},
+                {"params": self._jaw_pose, "lr": self.hparams["flame_lr"][2]},
+                {"params": self._eyes_pose, "lr": self.hparams["flame_lr"][2]},
+                {"params": self._translation, "lr": self._trans_lr[2]},
+                {"params": self._rotation, "lr": self.hparams["flame_lr"][2]},
+            ]
+            offset_params = [
+                {"params": self._offset_mlp.parameters(), "lr": self.hparams["offset_lr"][2]},
+                {"params": self._vert_feats, "lr": self.hparams["offset_lr"][2]},
+            ]
+            texture_params = [
+                {"params": self._texture.parameters(), "lr": self.hparams["tex_lr"][2]},
+                {"params": self._explFeatures.parameters(), "lr": self.hparams["tex_lr"][2], "weight_decay": self.hparams["texture_weight_decay"][2]},
+                {"params": self._normal_encoder.parameters(), "lr": self.hparams["tex_lr"][2]},
+            ]
+            optimizers.append(torch.optim.Adam(flame_params + offset_params + texture_params))
+
+        else:
+            raise ValueError(f"Unknown stage: {self._current_stage}")
+
+        # Learning rate schedulers (example: StepLR)
+        # schedulers.append(torch.optim.lr_scheduler.StepLR(optimizers[0], step_size=self.hparams.lr_decay_step, gamma=self.hparams.lr_decay_gamma))
+
+        return optimizers, schedulers
+
+
+    def forward(self, batch):
+        # Forward pass logic based on the current stage
+        frame_id = batch["frame_id"]
+        shape = self._shape
+        expr = self._expr[frame_id]
+        neck_pose = self._neck_pose[frame_id]
+        jaw_pose = self._jaw_pose[frame_id]
+        eyes_pose = self._eyes_pose[frame_id]
+        translation = self._translation[frame_id]
+        rotation = self._rotation[frame_id]
+        camera = batch["camera"]
+
+        # add noise to flame parameters during training if specified
+        if self.training and self.hparams.flame_noise > 0:
+            noise = torch.randn_like(expr) * self.hparams.flame_noise
+            expr = expr + noise
+            noise = torch.randn_like(neck_pose) * self.hparams.flame_noise
+            neck_pose = neck_pose + noise
+            noise = torch.randn_like(jaw_pose) * self.hparams.flame_noise
+            jaw_pose = jaw_pose + noise
+            noise = torch.randn_like(eyes_pose) * self.hparams.flame_noise
+            eyes_pose = eyes_pose + noise
+            noise = torch.randn_like(translation) * self.hparams.flame_noise
+            translation = translation + noise
+            noise = torch.randn_like(rotation) * self.hparams.flame_noise
+            rotation = rotation + noise
+
+        # Forward pass through FLAME model
+        flame_output = self._flame(
+            shape_params=shape,
+            expression_params=expr,
+            jaw_pose=jaw_pose,
+            neck_pose=neck_pose,
+            eye_pose=eyes_pose,
+        )
+        verts = flame_output["vertices"]
+        joints = flame_output["joints"]
+        lbs_weights = flame_output["lbs_weights"]
+        full_pose = flame_output["full_pose"]
+
+
+        # compute offsets
+        glob_rot = batch_rodrigues(rotation)
+        posed_verts = verts + torch.bmm(lbs_weights, full_pose.view(-1, 24, 3, 3)).view(-1, 1, 7597, 9)[:, 0] # Adjusted indexing
+        # transform to camera space
+        if self.training and self.hparams.glob_rot_noise > 0:
+             noise_axis = torch.randn_like(rotation)
+             noise_axis /= torch.norm(noise_axis, dim=-1, keepdim=True)
+             noise_angle = (torch.rand_like(rotation[:, :1]) - 0.5) * 2 * self.hparams.glob_rot_noise
+             noise_rot = batch_rodrigues(noise_axis * noise_angle)
+             glob_rot = torch.bmm(noise_rot, glob_rot)
+
+
+        # apply global rotation and translation
+        verts_cam = torch.bmm(glob_rot, posed_verts.transpose(1, 2)).transpose(1, 2) + translation.unsqueeze(1)
+
+        # compute normals from camera space vertices
+        normals = self._flame.get_normals(verts_cam)
+
+        # compute offsets
+        verts_offset = torch.zeros_like(verts_cam)
+        offset_verts = verts_cam[:, self._offset_indices]
+
+        # normalize vertices for offset prediction
+        norm_verts = (offset_verts - torch.mean(offset_verts, dim=1, keepdim=True)) / torch.std(offset_verts, dim=1, keepdim=True)
+        # norm_verts = offset_verts / torch.max(torch.abs(offset_verts)) # alternative normalization
+
+        # compute conditional features
+        view_dirs = -normalize_image_points(offset_verts, camera)
+        normal_encoding = self._normal_encoder(normals[:, self._offset_indices])
+        cond_feats_in = torch.cat([view_dirs, normal_encoding], dim=-1)
+
+
+        # compute offsets with mlp
+        offset_pred = self._offset_mlp(norm_verts, cond_feats_in)
+
+        # add offsets to vertices
+        verts_offset[:, self._offset_indices] = offset_pred
+        verts_cam_offset = verts_cam + verts_offset
+
+
+        # project to screen space
+        points_2d = batch_project(verts_cam_offset, camera)
+
+        # rasterize meshes
+        batch_size = verts_cam_offset.shape[0]
+        faces = self._flame.faces.expand(batch_size, -1, -1)
+
+        # create meshes object for rasterization
+        meshes = Meshes(verts=verts_cam_offset, faces=faces)
+
+        fragments = rasterize_meshes(
+            meshes,
+            image_size=batch["image"].shape[-2:],
+            blur_radius=0.0,
+            faces_per_pixel=1,
+            clip_barycentric_coords=False,
+        )
+        pix_to_face = fragments.pix_to_face
+        bary_coords = fragments.bary_coords
+        zbuf = fragments.zbuf
+
+        # interpolate vertex attributes to get features on the rendered image
+        vertex_features = torch.cat([verts_cam_offset, normals, self._explFeatures(verts_cam_offset)], dim=-1)
+        rendered_features = interpolate_face_attributes(
+            pix_to_face, bary_coords, meshes.verts_features_packed(vertex_features)
+        )
+
+
+        # compute mask from zbuf
+        mask = (zbuf > -1).float()
+
+        # compute texture
+        texture_uv = rendered_features[..., :3]  # camera space coordinates
+        normals_uv = rendered_features[..., 3:6] # normals in camera space
+        expl_feats_uv = rendered_features[..., 6:] # explicit texture features
+
+        # compute dynamic features (view direction and normal encoding)
+        view_dirs_uv = -normalize_image_points(texture_uv, camera)
+        dynamic_feats_uv = self._normal_encoder(normals_uv)
+        dynamic_feats_uv = torch.cat([view_dirs_uv, dynamic_feats_uv], dim=-1)
+
+        # compute texture color
+        texture_color = self._texture(texture_uv, expl_feats_uv, dynamic_feats_uv)
+
+        # compute rendered rgb image
+        rendered_rgb = fill_tensor_background(texture_color, mask, background_value=0.0)
+
+        # compute semantic segmentation
+        semantic_uv = interpolate_face_attributes(
+            pix_to_face, bary_coords, self._flame.vertex_labels.expand(batch_size, -1, -1)
+        )
+        rendered_semantic = fill_tensor_background(semantic_uv, mask, background_value=-1)
+        rendered_semantic = torch.argmax(rendered_semantic, dim=-1)
+
+
+        # compute rendered normal map
+        rendered_normal = fill_tensor_background(normals_uv, mask, background_value=0.0)
+
+
+        # compute rendered depth map
+        rendered_depth = fill_tensor_background(zbuf, mask, background_value=0.0)
+
+
+        outputs = {
+            "rendered_rgb": rendered_rgb,
+            "rendered_mask": mask,
+            "rendered_semantic": rendered_semantic,
+            "rendered_normal": rendered_normal,
+            "rendered_depth": rendered_depth,
+            "points_2d": points_2d,
+            "verts_cam_offset": verts_cam_offset,
+            "flame_shape": shape,
+            "flame_expr": expr,
+            "flame_neck_pose": neck_pose,
+            "flame_jaw_pose": jaw_pose,
+            "flame_eyes_pose": eyes_pose,
+            "flame_translation": translation,
+            "flame_rotation": rotation,
+            "flame_verts": verts_cam, # Vertices without offset in camera space
+        }
+        return outputs
+
+    def compute_loss(self, outputs, batch):
+        # Compute loss based on the current stage and available data
+        target_rgb = batch["image"]
+        target_mask = batch["mask"]
+        target_semantic = batch["semantic"]
+        target_normal = batch["normal"]
+        target_lmk = batch["landmarks"]
+
+        rendered_rgb = outputs["rendered_rgb"]
+        rendered_mask = outputs["rendered_mask"]
+        rendered_semantic = outputs["rendered_semantic"]
+        rendered_normal = outputs["rendered_normal"]
+        points_2d = outputs["points_2d"]
+
+        total_loss = 0
+        losses = {}
+
+        # RGB Loss
+        if self.hparams.w_rgb[0 if self._current_stage == "flame" else (1 if self._current_stage == "texture" else 2)] > 0:
+            rgb_loss = self._masked_L1(rendered_rgb, target_rgb, target_mask)
+            total_loss += rgb_loss * self.hparams.w_rgb[0 if self._current_stage == "flame" else (1 if self._current_stage == "texture" else 2)]
+            losses["rgb_loss"] = rgb_loss
+
+        # Perceptual Loss
+        # Check if perceptual loss is initialized and the weight is greater than 0 for the current stage
+        perc_weight = self.hparams.w_perc[0 if self._current_stage == "flame" else (1 if self._current_stage == "texture" else 2)]
+        if self._perceptual_loss is not None and perc_weight > 0:
+            # Ensure inputs are in the correct format and device for perceptual loss
+            rendered_rgb_scaled = (rendered_rgb + 1) / 2 # Scale from [-1, 1] to [0, 1]
+            target_rgb_scaled = (target_rgb + 1) / 2 # Scale from [-1, 1] to [0, 1]
+
+            # Perceptual loss expects Bx3xHxW
+            rendered_rgb_permuted = rendered_rgb_scaled.permute(0, 3, 1, 2)
+            target_rgb_permuted = target_rgb_scaled.permute(0, 3, 1, 2)
+
+
+            # Check if perceptual loss is on the same device as inputs
+            if rendered_rgb_permuted.device != self._perceptual_loss.module.layer1[0].conv1.weight.device:
+                 print(f"[NHADEBUG] Perceptual loss device mismatch: rendered_rgb on {rendered_rgb_permuted.device}, perceptual_loss on {self._perceptual_loss.module.layer1[0].conv1.weight.device}")
+                 # Move perceptual loss to the correct device if needed (should ideally be handled in __init__)
+                 # self._perceptual_loss = self._perceptual_loss.to(rendered_rgb_permuted.device)
+
+
+            perceptual_loss = self._perceptual_loss(rendered_rgb_permuted, target_rgb_permuted, normalize_input=False)
+            total_loss += perceptual_loss * perc_weight
+            losses["perc_loss"] = perceptual_loss
+        else:
+             # Log that perceptual loss is not used
+             # print(f"[NHADEBUG] Perceptual loss not used. _perceptual_loss is None: {self._perceptual_loss is None}, weight is {perc_weight}")
+             losses["perc_loss"] = torch.tensor(0.0).to(target_rgb.device)
+
+
+        # Landmark Loss
+        if self.hparams.w_lmk[0 if self._current_stage == "flame" else (1 if self._current_stage == "texture" else 2)] > 0:
+            # Assuming landmarks are available in the batch and outputs
+            # You need to implement landmark loss calculation based on your model's output and target landmarks
+            lmk_loss = torch.tensor(0.0).to(target_rgb.device)  # Placeholder
+            total_loss += lmk_loss * self.hparams.w_lmk[0 if self._current_stage == "flame" else (1 if self._current_stage == "texture" else 2)]
+            losses["lmk_loss"] = lmk_loss
+
+
+        # Eye Closed Loss
+        if self.hparams.w_eye_closed[0 if self._current_stage == "flame" else (1 if self._current_stage == "texture" else 2)] > 0:
+            # Assuming you have a way to determine if eyes are closed from model outputs or batch
+            # You need to implement eye closed loss calculation
+            eye_closed_loss = torch.tensor(0.0).to(target_rgb.device) # Placeholder
+            total_loss += eye_closed_loss * self.hparams.w_eye_closed[0 if self._current_stage == "flame" else (1 if self._current_stage == "texture" else 2)]
+            losses["eye_closed_loss"] = eye_closed_loss
+
+        # Edge Loss
+        if self.hparams.w_edge[0 if self._current_stage == "flame" else (1 if self._current_stage == "texture" else 2)] > 0:
+            # Assuming you have a way to compute edges from rendered and target images
+            # You need to implement edge loss calculation
+            edge_loss = torch.tensor(0.0).to(target_rgb.device) # Placeholder
+            total_loss += edge_loss * self.hparams.w_edge[0 if self._current_stage == "flame" else (1 if self._current_stage == "texture" else 2)]
+            losses["edge_loss"] = edge_loss
+
+        # Normal Loss
+        if self.hparams.w_norm[0 if self._current_stage == "flame" else (1 if self._current_stage == "texture" else 2)] > 0:
+            # Assuming you have target normals and rendered normals
+            # You need to implement normal loss calculation
+            normal_loss = torch.tensor(0.0).to(target_rgb.device) # Placeholder
+            total_loss += normal_loss * self.hparams.w_norm[0 if self._current_stage == "flame" else (1 if self._current_stage == "texture" else 2)]
+            losses["norm_loss"] = normal_loss
+
+        # Laplacian Loss
+        # Assuming w_lap is a list of lists or tuples like [[weight1, epoch1], [weight2, epoch2], ...]
+        current_epoch = self.current_epoch
+        lap_weight = 0
+        for weight, epoch in self.hparams.w_lap:
+            if current_epoch >= epoch:
+                lap_weight = weight
+
+        if lap_weight > 0:
+             # Assuming you have a way to compute Laplacian of the mesh
+             # You need to implement Laplacian loss calculation
+             laplacian_loss = torch.tensor(0.0).to(target_rgb.device) # Placeholder
+             total_loss += laplacian_loss * lap_weight
+             losses["lap_loss"] = laplacian_loss
+             losses["decay_lap"] = torch.tensor(lap_weight).to(target_rgb.device)
+        else:
+             losses["lap_loss"] = torch.tensor(0.0).to(target_rgb.device)
+             losses["decay_lap"] = torch.tensor(0.0).to(target_rgb.device)
+
+
+        # Shape Regularization
+        if self.hparams.w_shape_reg[0 if self._current_stage == "flame" else (1 if self._current_stage == "texture" else 2)] > 0:
+            # Assuming you have flame shape parameters
+            shape_reg_loss = torch.mean(self._shape**2) # Example regularization
+            total_loss += shape_reg_loss * self.hparams.w_shape_reg[0 if self._current_stage == "flame" else (1 if self._current_stage == "texture" else 2)]
+            losses["shape_reg_loss"] = shape_reg_loss
+
+        # Expression Regularization
+        if self.hparams.w_expr_reg[0 if self._current_stage == "flame" else (1 if self._current_stage == "texture" else 2)] > 0:
+            # Assuming you have flame expression parameters
+            expr_reg_loss = torch.mean(self._expr[batch["frame_id"]]**2) # Example regularization
+            total_loss += expr_reg_loss * self.hparams.w_expr_reg[0 if self._current_stage == "flame" else (1 if self._current_stage == "texture" else 2)]
+            losses["expr_reg_loss"] = expr_reg_loss
+
+        # Pose Regularization
+        if self.hparams.w_pose_reg[0 if self._current_stage == "flame" else (1 if self._current_stage == "texture" else 2)] > 0:
+            # Assuming you have flame pose parameters (neck, jaw, eyes)
+            pose_reg_loss = torch.mean(self._neck_pose[batch["frame_id"]]**2) + \
+                            torch.mean(self._jaw_pose[batch["frame_id"]]**2) + \
+                            torch.mean(self._eyes_pose[batch["frame_id"]]**2) # Example regularization
+            total_loss += pose_reg_loss * self.hparams.w_pose_reg[0 if self._current_stage == "flame" else (1 if self._current_stage == "texture" else 2)]
+            losses["pose_reg_loss"] = pose_reg_loss
+
+        # Surface Regularization
+        if self.hparams.w_surface_reg[0 if self._current_stage == "flame" else (1 if self._current_stage == "texture" else 2)] > 0:
+            # Assuming you have offset vertices
+            surface_reg_loss = torch.mean(outputs["verts_cam_offset"]**2) # Example regularization
+            total_loss += surface_reg_loss * self.hparams.w_surface_reg[0 if self._current_stage == "flame" else (1 if self._current_stage == "texture" else 2)]
+            losses["surface_reg_loss"] = surface_reg_loss
+
+        # Texture Weight Decay
+        if self._current_stage in ["texture", "joint_flame"] and self.hparams.texture_weight_decay[1 if self._current_stage == "texture" else 2] > 0:
+            # Assuming you have explicit texture features
+            texture_decay_loss = torch.mean(self._explFeatures.parameters().__next__().norm(2)**2) # Example weight decay
+            total_loss += texture_decay_loss * self.hparams.texture_weight_decay[1 if self._current_stage == "texture" else 2]
+            losses["texture_decay_loss"] = texture_decay_loss
+
+        # Silhouette Loss
+        # Assuming w_silh is a list of lists or tuples like [[weight1, epoch1], [weight2, epoch2], ...]
+        silh_weight = 0
+        for weight, epoch in self.hparams.w_silh:
+            if current_epoch >= epoch:
+                silh_weight = weight
+
+        if silh_weight > 0:
+            # Assuming you have rendered mask and target mask
+            # You need to implement Silhouette loss calculation
+            silhouette_loss = torch.tensor(0.0).to(target_rgb.device) # Placeholder
+            total_loss += silhouette_loss * silh_weight
+            losses["silh_loss"] = silhouette_loss
+            losses["decay_silh"] = torch.tensor(silh_weight).to(target_rgb.device)
+        else:
+             losses["silh_loss"] = torch.tensor(0.0).to(target_rgb.device)
+             losses["decay_silh"] = torch.tensor(0.0).to(target_rgb.device)
+
+        # Semantic Losses (Ear, Eye, Mouth, Hair)
+        # Assuming you have rendered semantic map and target semantic map
+        # You need to implement semantic loss calculation for each part
+
+        # Ear Loss
+        if self.hparams.w_semantic_ear[0 if self._current_stage == "flame" else (1 if self._current_stage == "texture" else 2)] > 0:
+            ear_semantic_loss = torch.tensor(0.0).to(target_rgb.device) # Placeholder
+            total_loss += ear_semantic_loss * self.hparams.w_semantic_ear[0 if self._current_stage == "flame" else (1 if self._current_stage == "texture" else 2)]
+            losses["semantic_ear_loss"] = ear_semantic_loss
+
+        # Eye Loss
+        if self.hparams.w_semantic_eye[0 if self._current_stage == "flame" else (1 if self._current_stage == "texture" else 2)] > 0:
+            eye_semantic_loss = torch.tensor(0.0).to(target_rgb.device) # Placeholder
+            total_loss += eye_semantic_loss * self.hparams.w_semantic_eye[0 if self._current_stage == "flame" else (1 if self._current_stage == "texture" else 2)]
+            losses["semantic_eye_loss"] = eye_semantic_loss
+
+        # Mouth Loss
+        if self.hparams.w_semantic_mouth[0 if self._current_stage == "flame" else (1 if self._current_stage == "texture" else 2)] > 0:
+            mouth_semantic_loss = torch.tensor(0.0).to(target_rgb.device) # Placeholder
+            total_loss += mouth_semantic_loss * self.hparams.w_semantic_mouth[0 if self._current_stage == "flame" else (1 if self._current_stage == "texture" else 2)]
+            losses["semantic_mouth_loss"] = mouth_semantic_loss
+
+        # Hair Loss
+        # Assuming w_semantic_hair is a list of lists or tuples like [[weight1, epoch1], [weight2, epoch2], ...]
+        hair_semantic_weight = 0
+        for weight, epoch in self.hparams.w_semantic_hair:
+            if current_epoch >= epoch:
+                hair_semantic_weight = weight
+
+        if hair_semantic_weight > 0:
+            # Assuming you have rendered semantic map and target semantic map
+            # You need to implement hair semantic loss calculation
+            hair_semantic_loss = torch.tensor(0.0).to(target_rgb.device) # Placeholder
+            total_loss += hair_semantic_loss * hair_semantic_weight
+            losses["semantic_hair_loss"] = hair_semantic_loss
+            losses["decay_semantic"] = torch.tensor(hair_semantic_weight).to(target_rgb.device)
+        else:
+             losses["semantic_hair_loss"] = torch.tensor(0.0).to(target_rgb.device)
+             losses["decay_semantic"] = torch.tensor(0.0).to(target_rgb.device)
+
+
+        losses["total_loss"] = total_loss
+
+        return losses
+
+    def training_step(self, batch, batch_idx):
+        # Training step logic
+        outputs = self(batch)
+        losses = self.compute_loss(outputs, batch)
+
+        # Manual optimization steps
+        optimizer = self.optimizers()
+        loss = losses["total_loss"]
+
+        # Backward pass and optimizer step
+        self.manual_backward(loss)
+        optimizer.step()
+        optimizer.zero_grad()
+
+        # Log training losses
+        self.log_dict({f"train_{key}_step": val for key, val in losses.items()}, on_step=True, on_epoch=False)
+        self.log_dict({f"train_{key}_epoch": val for key, val in losses.items()}, on_step=False, on_epoch=True)
+
+        return losses["total_loss"]
+
+    def validation_step(self, batch, batch_idx):
+        # Validation step logic
+        outputs = self(batch)
+        losses = self.compute_loss(outputs, batch)
+
+        # Log validation losses
+        self.log_dict({f"val_{key}_step": val for key, val in losses.items()}, on_step=True, on_epoch=False)
+        self.log_dict({f"val_{key}_epoch": val for key, val in losses.items()}, on_step=False, on_epoch=True)
+
+        return losses["total_loss"]
+
+    def on_validation_epoch_end(self):
+        # Code to run at the end of the validation epoch
+        # You can add visualization or other evaluation logic here
+        pass
