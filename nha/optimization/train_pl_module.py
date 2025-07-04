@@ -69,10 +69,10 @@ def train_pl_module(optimizer_module, data_module, args=None):
     args_dict['max_frame_id'] = data.max_frame_id
     ckpt_path = os.path.join(args_dict["default_root_dir"], "checkpoints", "last.ckpt")
 
-    # init optimizer
+    # init optimizer ###LCX20250704 STRICT改为FALSE。
     if os.path.isfile(ckpt_path):
         print(f"Resuming from checkpoint: {ckpt_path}")
-        model = optimizer_module.load_from_checkpoint(ckpt_path, strict=True, **args_dict)
+        model = optimizer_module.load_from_checkpoint(ckpt_path, strict=False, **args_dict)
     else:
         print(f"No checkpoint found at {ckpt_path}, training from scratch.")
         model = optimizer_module(**args_dict)
