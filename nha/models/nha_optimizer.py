@@ -2,6 +2,7 @@
 ###LCX 20250619 修改1：增加了 def compute_loss(self, outputs, batch)。修改2：forward（）。修改3：step()。本次修改见COPILOT-NHA-GPU-20250619A，主要解决GPU显存不足，降低算力要求之后。
 ###LCX 20250621 修改：回调checkpoints的存放路径，应该统一指定到LCX-ME01/checkpoints里去。LCX20250702DENUG:怀疑RESNET感知模型没有被调用。LCX20250702修改为无条件加载perceptualloss。
 ###LCX20250702 修改，增加了def on_fit_start(self)函数。在RESUME之后检查感知LOSS，如果没有就加载。LCX20250703修改：将感知损失的初始化和设备迁移移到__init__中。
+###LCX20250704修改2个地方。1是281行，参数1.其次是把感知损失的模型加载转移到INIT里。
 import os
 
 # Change the current working directory to the root of the cloned repository
@@ -278,7 +279,8 @@ class NHAOptimizer(pl.LightningModule):
         self._trans_lr = [0.1 * i for i in self.hparams["flame_lr"]]
 
         self._semantic_thr = 0.99
-        self._blurred_vertex_labels = self._flame.sparse_vertex_labels(self.semantic_labels, 10)  ###LCX20250704修改，原文sparse_vertex_labels 方法需要一个有长度的输入（比如列表或元组）
+        # Corrected method call based on FlameHead class definition
+        self._blurred_vertex_labels = self._flame.get_blurred_vertex_labels(self.semantic_labels, 10)
 
     # Removed on_fit_start as the perceptual loss initialization is moved to __init__
     # def on_fit_start(self):
