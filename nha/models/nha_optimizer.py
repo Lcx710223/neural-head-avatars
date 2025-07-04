@@ -1,8 +1,9 @@
 ###LCX 20250612 大修改，COPILOT编码。
 ###LCX 20250619 修改1：增加了 def compute_loss(self, outputs, batch)。修改2：forward（）。修改3：step()。本次修改见COPILOT-NHA-GPU-20250619A，主要解决GPU显存不足，降低算力要求之后。
-###LCX 20250621 修改：回调checkpoints的存放路径，应该统一指定到LCX-ME01/checkpoints里去。LCX20250702DENUG:怀疑RESNET感知模型没有被调用。LCX20250702修改为无条件加载perceptualloss。
+###LCX 20250621 修改：回调checkpoints的存放路径，应该统一指定到LCX-ME01/checkpoints里去。LCX20250702DENUG:怀疑RESNET感知模型没有被调用。LCX20250702修改为无条件加载perceptual loss。
 ###LCX20250702 修改，增加了def on_fit_start(self)函数。在RESUME之后检查感知LOSS，如果没有就加载。LCX20250703修改：将感知损失的初始化和设备迁移移到__init__中。
-###LCX20250704修改2个地方。1是281行，参数1.其次是把感知损失的模型加载转移到INIT里。
+###LCX20250704 修改。281行的参数1.感知损失的模型加载转移到INIT里。
+
 import os
 
 # Change the current working directory to the root of the cloned repository
@@ -279,13 +280,51 @@ class NHAOptimizer(pl.LightningModule):
         self._trans_lr = [0.1 * i for i in self.hparams["flame_lr"]]
 
         self._semantic_thr = 0.99
-        # Corrected method call based on FlameHead class definition
-        self._blurred_vertex_labels = self._flame.get_blurred_vertex_labels(self.semantic_labels, 10)
+        # Moved _blurred_vertex_labels initialization to setup method
+        self._blurred_vertex_labels = None
 
     # Removed on_fit_start as the perceptual loss initialization is moved to __init__
     # def on_fit_start(self):
     #     # Perceptual Loss Initialization moved to __init__
     #     pass
+
+    def setup(self, stage=None):
+        # Initialize _blurred_vertex_labels here after the model is set up
+        if self._flame is not None and self.semantic_labels is not None:
+             try:
+                 self._blurred_vertex_labels = self._flame.get_blurred_vertex_labels(self.semantic_labels, 10)
+                 print("[LCX-DEBUG] _blurred_vertex_labels initialized in setup.")
+             except AttributeError:
+                 print("[LCX-DEBUG] AttributeError: 'FlameHead' object has no attribute 'get_blurred_vertex_labels' during setup.")
+                 # Handle the error, maybe set _blurred_vertex_labels to a default or raise a more informative error
+                 self._blurred_vertex_labels = None # Or handle differently
+             except Exception as e:
+                 print(f"[LCX-DEBUG] An unexpected error occurred during _blurred_vertex_labels initialization in setup: {e}")
+                 self._blurred_vertex_labels = None # Or handle differently
+
+    def on_load_checkpoint(self, checkpoint):
+        # This method is called when a checkpoint is loaded.
+        # We can explicitly load the state dict here if needed,
+        # or add debugging prints.
+        print("[LCX-DEBUG] on_load_checkpoint called.")
+        print(f"[LCX-DEBUG] type(self): {type(self)}")
+        print(f"[LCX-DEBUG] 'load_state_dict' in dir(self): {'load_state_dict' in dir(self)}")
+        if "state_dict" in checkpoint:
+            print("[LCX-DEBUG] 'state_dict' found in checkpoint.")
+            # Explicitly call the parent's load_state_dict
+            try:
+                # Check if load_state_dict exists before calling
+                if hasattr(super(), 'load_state_dict'):
+                     print("[LCX-DEBUG] Calling super().load_state_dict with strict=False.") # Updated log message
+                     super().load_state_dict(checkpoint["state_dict"], strict=False) # Changed strict to False
+                     print("[LCX-DEBUG] super().load_state_dict finished.")
+                else:
+                     print("[LCX-DEBUG] super() does not have load_state_dict.")
+            except Exception as e:
+                 print(f"[LCX-DEBUG] Error during super().load_state_dict: {e}")
+        else:
+            print("[LCX-DEBUG] 'state_dict' not found in checkpoint.")
+
 
     def set_stage(self, stage):
         self._current_stage = stage
