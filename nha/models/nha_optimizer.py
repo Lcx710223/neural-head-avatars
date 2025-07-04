@@ -2,11 +2,10 @@
 ###LCX 20250619 修改1：增加了 def compute_loss(self, outputs, batch)。修改2：forward（）。修改3：step()。本次修改见COPILOT-NHA-GPU-20250619A，主要解决GPU显存不足，降低算力要求之后。
 ###LCX 20250621 修改：回调checkpoints的存放路径，应该统一指定到LCX-ME01/checkpoints里去。LCX20250702DENUG:怀疑RESNET感知模型没有被调用。LCX20250702修改为无条件加载perceptualloss。
 ###LCX20250702 修改，增加了def on_fit_start(self)函数。在RESUME之后检查感知LOSS，如果没有就加载。LCX20250703修改：将感知损失的初始化和设备迁移移到__init__中。
-###LCX20250704，修改，把感知损失的模型加载从ON-FIT-START()转移到_INIT_当中。
 import os
 
 # Change the current working directory to the root of the cloned repository
-%cd /content/neural-head-avatars
+# %cd /content/neural-head-avatars # Removed as it's a magic command and causes SyntaxError in .py file
 
 from nha.models.texture import MultiTexture
 from nha.models.flame import *
@@ -169,22 +168,7 @@ class NHAOptimizer(pl.LightningModule):
             "accumulate_grad_batches": 1,
         }
 
-
-        # 将感知损失的初始化和设备迁移移到__init__中
-        # Perceptual Loss Initialization
-        try:
-            self._perceptual_loss = NoSubmoduleWrapper(ResNetLOSS())
-            # Move perceptual loss to the device during initialization
-            # Use self.device if available, otherwise default to 'cuda' if a GPU is available
-            device = self.device if hasattr(self, 'device') else ('cuda' if torch.cuda.is_available() else 'cpu')
-            self._perceptual_loss = self._perceptual_loss.to(device)
-            print("[LCX-DEBUG] Perceptual loss initialized and moved to device in __init__.")
-        except Exception as e:
-            print(f"[LCX-DEBUG] Failed to initialize perceptual loss network in __init__: {e}")
-            self._perceptual_loss = None
-
-
-        # flame model
+        # flame model - Ensure _flame is initialized early
         ignore_faces = np.load(FLAME_LOWER_NECK_FACES_PATH)
         upsample_regions = dict(all=self.hparams["subdivide_mesh"])
 
@@ -198,6 +182,26 @@ class NHAOptimizer(pl.LightningModule):
             upsample_regions=upsample_regions,
             spatial_blur_sigma=self.hparams["spatial_blur_sigma"],
         )
+
+        # body part weights and semantic labels - Initialize after _flame
+        with open(body_part_weights, "r") as f:
+            key = "mlp"
+            self._body_part_loss_weights = json.load(f)[key]
+        self.semantic_labels = list(self._flame.get_body_parts().keys())
+
+        ###LCX20250703 修改：将感知损失的初始化和设备迁移移到__init__中
+        # Perceptual Loss Initialization
+        try:
+            self._perceptual_loss = NoSubmoduleWrapper(ResNetLOSS())
+            # Move perceptual loss to the device during initialization
+            # Use self.device if available, otherwise default to 'cuda' if a GPU is available
+            device = self.device if hasattr(self, 'device') else ('cuda' if torch.cuda.is_available() else 'cpu')
+            self._perceptual_loss = self._perceptual_loss.to(device)
+            print("[LCX-DEBUG] Perceptual loss initialized and moved to device in __init__.")
+        except Exception as e:
+            print(f"[LCX-DEBUG] Failed to initialize perceptual loss network in __init__: {e}")
+            self._perceptual_loss = None
+
 
         self._shape = torch.nn.Parameter(torch.zeros(1, FLAME_N_SHAPE), requires_grad=True)
         self._expr = torch.nn.Parameter(torch.zeros(max_frame_id + 1, FLAME_N_EXPR), requires_grad=True)
@@ -260,11 +264,6 @@ class NHAOptimizer(pl.LightningModule):
             "silh": DecayScheduler(*w_silh, geometric=False),
         }
 
-        # body part weights
-        with open(body_part_weights, "r") as f:
-            key = "mlp"
-            self._body_part_loss_weights = json.load(f)[key]
-        self.semantic_labels = list(self._flame.get_body_parts().keys())
 
         # loss definitions
         self._leaky_hinge = LeakyHingeLoss(0.0, 1.0, 0.3)
@@ -279,7 +278,7 @@ class NHAOptimizer(pl.LightningModule):
         self._trans_lr = [0.1 * i for i in self.hparams["flame_lr"]]
 
         self._semantic_thr = 0.99
-        self._blurred_vertex_labels = self._flame.sparse_vertex_labels(self.semantic_labels, 10)
+        self._blurred_vertex_labels = self._flame.sparse_vertex_labels(self.semantic_labels, 10)  ###LCX20250704修改，原文sparse_vertex_labels 方法需要一个有长度的输入（比如列表或元组）
 
     # Removed on_fit_start as the perceptual loss initialization is moved to __init__
     # def on_fit_start(self):
