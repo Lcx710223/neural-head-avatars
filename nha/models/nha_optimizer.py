@@ -1,6 +1,6 @@
 ###LCX20250707修改。339行，FORWARD里的FLAME_OUT增加return_joints=True。
 ###LCX20250707修改，369，403，增加参数resolution。
-###LCX20250707修改，369，把image修改为RGB。
+###LCX20250707修改，369，把image修改为RGB。310，FRAME_ID改为：batch["frame"]
 import os
 
 from nha.models.texture import MultiTexture
@@ -307,7 +307,7 @@ class NHAOptimizer(pl.LightningModule):
         return optimizers, schedulers
 
     def forward(self, batch):
-        frame_id = batch["frame_id"]
+        frame_id = batch["frame"]
         shape = self._shape
         expr = self._expr[frame_id]
         neck_pose = self._neck_pose[frame_id]
