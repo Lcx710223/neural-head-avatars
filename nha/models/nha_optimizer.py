@@ -1,7 +1,8 @@
 ###LCX20250707修改。339行，FORWARD里的FLAME_OUT增加return_joints=True。
 ###LCX20250707修改，369，403，增加参数resolution。
+###LCX20250707修改，369，把image修改为RGB。
 import os
-from nha.util.meshes import vertex_normals
+
 from nha.models.texture import MultiTexture
 from nha.models.flame import *
 from nha.models.offset_mlp import OffsetMLP
@@ -32,6 +33,7 @@ from nha.util.general import (
 from nha.util.screen_grad import screen_grad
 from nha.util.lbs import batch_rodrigues
 from nha.util.log import get_logger
+from nha.util.meshes import vertex_normals
 
 from pytorch3d.renderer import TexturesVertex, rasterize_meshes
 from pytorch3d.renderer.mesh.rasterizer import Fragments
@@ -305,7 +307,7 @@ class NHAOptimizer(pl.LightningModule):
         return optimizers, schedulers
 
     def forward(self, batch):
-        frame_id = batch["frame"]
+        frame_id = batch["frame_id"]
         shape = self._shape
         expr = self._expr[frame_id]
         neck_pose = self._neck_pose[frame_id]
@@ -314,6 +316,14 @@ class NHAOptimizer(pl.LightningModule):
         translation = self._translation[frame_id]
         rotation = self._rotation[frame_id]
         camera = batch["camera"]
+
+        # 兼容多种图片key
+        if "image" in batch:
+            resolution = batch["image"].shape[-2:]
+        elif "rgb" in batch:
+            resolution = batch["rgb"].shape[-2:]
+        else:
+            raise KeyError("Neither 'image' nor 'rgb' found in batch for resolution extraction!")
 
         if self.training and self.hparams.flame_noise > 0:
             noise = torch.randn_like(expr) * self.hparams.flame_noise
@@ -329,7 +339,6 @@ class NHAOptimizer(pl.LightningModule):
             noise = torch.randn_like(rotation) * self.hparams.flame_noise
             rotation = rotation + noise
 
-        # --- 关键：返回joints和lbs_weights等
         flame_output = self._flame(
             shape,
             expr,
@@ -337,7 +346,7 @@ class NHAOptimizer(pl.LightningModule):
             neck_pose,
             jaw_pose,
             eyes_pose,
-            return_joints=True,###LCX20250707增加TRUE。
+            return_joints=True,
             return_landmarks=None,
         )
         verts = flame_output["vertices"]
@@ -349,7 +358,7 @@ class NHAOptimizer(pl.LightningModule):
         if lbs_weights is not None and full_pose is not None:
             posed_verts = verts + torch.bmm(lbs_weights, full_pose.view(-1, 24, 3, 3)).view(-1, 1, 7597, 9)[:, 0]
         else:
-            posed_verts = verts  # fallback
+            posed_verts = verts
 
         if self.training and self.hparams.glob_rot_noise > 0:
             noise_axis = torch.randn_like(rotation)
@@ -359,16 +368,14 @@ class NHAOptimizer(pl.LightningModule):
             glob_rot = torch.bmm(noise_rot, glob_rot)
 
         verts_cam = torch.bmm(glob_rot, posed_verts.transpose(1, 2)).transpose(1, 2) + translation.unsqueeze(1)
-        ### normals = self._flame.get_normals(verts_cam) ###LCX20250707修改为下面：
+
         normals = vertex_normals(verts_cam, self._flame.faces.expand(verts_cam.shape[0], -1, -1))
+
         verts_offset = torch.zeros_like(verts_cam)
         offset_verts = verts_cam[:, self._offset_indices]
 
         norm_verts = (offset_verts - torch.mean(offset_verts, dim=1, keepdim=True)) / torch.std(offset_verts, dim=1, keepdim=True)
-        ###LCX20250707修改：
-        resolution = batch["image"].shape[-2:]
         view_dirs = -normalize_image_points(offset_verts, camera, resolution)
-        ###原：view_dirs = -normalize_image_points(offset_verts, camera)
         normal_encoding = self._normal_encoder(normals[:, self._offset_indices])
         cond_feats_in = torch.cat([view_dirs, normal_encoding], dim=-1)
 
@@ -383,7 +390,7 @@ class NHAOptimizer(pl.LightningModule):
 
         fragments = rasterize_meshes(
             meshes,
-            image_size=batch["image"].shape[-2:],
+            image_size=resolution,
             blur_radius=0.0,
             faces_per_pixel=1,
             clip_barycentric_coords=False,
@@ -401,7 +408,6 @@ class NHAOptimizer(pl.LightningModule):
         texture_uv = rendered_features[..., :3]
         normals_uv = rendered_features[..., 3:6]
         expl_feats_uv = rendered_features[..., 6:]
-        ###LCX20250707修改：
         view_dirs_uv = -normalize_image_points(texture_uv, camera, resolution)
         dynamic_feats_uv = self._normal_encoder(normals_uv)
         dynamic_feats_uv = torch.cat([view_dirs_uv, dynamic_feats_uv], dim=-1)
