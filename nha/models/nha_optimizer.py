@@ -1,6 +1,5 @@
 ###LCX20250707修改。339行，FORWARD里的FLAME_OUT增加return_joints=True。
-###LCX20250707修改，308行，frame_id = batch["frame_id"]修改为：frame_id = batch["frame"]
-###LCX20250707修改，363行。normals = self._flame.get_normals(verts_cam)修改为：from nha.util.meshes import vertex_normals  normals = vertex_normals(verts_cam, self._flame.faces.expand(verts_cam.shape[0], -1, -1))
+###LCX20250707修改，369，403，增加参数resolution。
 import os
 from nha.util.meshes import vertex_normals
 from nha.models.texture import MultiTexture
@@ -360,13 +359,16 @@ class NHAOptimizer(pl.LightningModule):
             glob_rot = torch.bmm(noise_rot, glob_rot)
 
         verts_cam = torch.bmm(glob_rot, posed_verts.transpose(1, 2)).transpose(1, 2) + translation.unsqueeze(1)
-        ### normals = self._flame.get_normals(verts_cam) LCX20260707修改如下：
+        ### normals = self._flame.get_normals(verts_cam) ###LCX20250707修改为下面：
         normals = vertex_normals(verts_cam, self._flame.faces.expand(verts_cam.shape[0], -1, -1))
         verts_offset = torch.zeros_like(verts_cam)
         offset_verts = verts_cam[:, self._offset_indices]
 
         norm_verts = (offset_verts - torch.mean(offset_verts, dim=1, keepdim=True)) / torch.std(offset_verts, dim=1, keepdim=True)
-        view_dirs = -normalize_image_points(offset_verts, camera)
+        ###LCX20250707修改：
+        resolution = batch["image"].shape[-2:]
+        view_dirs = -normalize_image_points(offset_verts, camera, resolution)
+        ###原：view_dirs = -normalize_image_points(offset_verts, camera)
         normal_encoding = self._normal_encoder(normals[:, self._offset_indices])
         cond_feats_in = torch.cat([view_dirs, normal_encoding], dim=-1)
 
@@ -399,7 +401,8 @@ class NHAOptimizer(pl.LightningModule):
         texture_uv = rendered_features[..., :3]
         normals_uv = rendered_features[..., 3:6]
         expl_feats_uv = rendered_features[..., 6:]
-        view_dirs_uv = -normalize_image_points(texture_uv, camera)
+        ###LCX20250707修改：
+        view_dirs_uv = -normalize_image_points(texture_uv, camera, resolution)
         dynamic_feats_uv = self._normal_encoder(normals_uv)
         dynamic_feats_uv = torch.cat([view_dirs_uv, dynamic_feats_uv], dim=-1)
         texture_color = self._texture(texture_uv, expl_feats_uv, dynamic_feats_uv)
