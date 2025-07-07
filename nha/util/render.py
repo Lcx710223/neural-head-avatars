@@ -1,3 +1,4 @@
+###LCX20250707修改64行整个函数。
 from pytorch3d.renderer import (
     TexturesVertex,
     DirectionalLights,
@@ -61,17 +62,16 @@ def create_intrinsics_matrix(fx, fy, px, py):
     return torch.tensor([[fx, 0, px], [0, fy, py], [0, 0, 1.0]]).float()
 
 
-def normalize_image_points(u, v, resolution):
+def normalize_image_points(points, resolution):
     """
-    normalizes u, v coordinates from [0 ,image_size] to [-1, 1]
-    :param u:
-    :param v:
-    :param resolution:
+    normalizes x, y coordinates from [0 ,image_size] to [-1, 1]
+    :param points: (..., 2) or (..., 3)
+    :param resolution: (H, W)
     :return:
     """
-    u = 2 * (u - resolution[1] / 2.0) / resolution[1]
-    v = 2 * (v - resolution[0] / 2.0) / resolution[0]
-    return u, v
+    u = 2 * (points[..., 0] - resolution[1] / 2.0) / resolution[1]
+    v = 2 * (points[..., 1] - resolution[0] / 2.0) / resolution[0]
+    return torch.stack([u, v], dim=-1)
 
 
 def create_camera_objects(K, RT, resolution, device):
