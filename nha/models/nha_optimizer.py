@@ -10,11 +10,13 @@
 ###LCX20250707增加两个函数：308行，TRAIN_DATALOADER(),VAL_DATALOADER()
 ###LCX20250707修改，420，frame_id = batch["frame_id"]修改为：batch["frame"]
 ###LCX20250707统一447行与FLME.PY文件里的FORWARD，都用位置传参数而不用关键字传参数。
+###LCX20250707增加，19行，顶部：from nha.util.meshes import vertex_normals。同时修改470行，与FLAME.PY统一起来。
+
 import os
 
 # Change the current working directory to the root of the cloned repository
 # %cd /content/neural-head-avatars # Removed as it's a magic command and causes SyntaxError in .py file
-
+from nha.util.meshes import vertex_normals
 from nha.models.texture import MultiTexture
 from nha.models.flame import *
 from nha.models.offset_mlp import OffsetMLP
@@ -464,8 +466,8 @@ class NHAOptimizer(pl.LightningModule):
         # apply global rotation and translation
         verts_cam = torch.bmm(glob_rot, posed_verts.transpose(1, 2)).transpose(1, 2) + translation.unsqueeze(1)
 
-        # compute normals from camera space vertices
-        normals = self._flame.get_normals(verts_cam)
+        # compute normals from camera space vertices ###LCX20250707 与FLAME.PY统一起来，修改下面470行。
+        normals = self._flame.get_normals(verts_cam, self._flame.faces.expand(verts_cam.shape[0], -1, -1))
 
         # compute offsets
         verts_offset = torch.zeros_like(verts_cam)
