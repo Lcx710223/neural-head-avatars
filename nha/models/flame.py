@@ -1,3 +1,5 @@
+###LCX20250707修改767行。增加了判断。
+
 """
 Code heavily inspired by https://github.com/HavenFeng/photometric_optimization/blob/master/models/FLAME.py. 
 Please consider citing their work if you find this code useful. The code is subject to the license available via
@@ -763,6 +765,10 @@ class FlameHead(nn.Module):
             else:
                 eyes = torch.cat([self._apply_rotation_limit(eyes[:, :3], self.eye_limits),
                                   self._apply_rotation_limit(eyes[:, 3:], self.eye_limits)], dim=1)
+        ###LCX20250707增加下面一句判断：
+        ###假设 shape 为 (1, n_shape)，expr 为 (B, n_expr)
+        if shape.shape[0] == 1 and expr.shape[0] > 1:
+            shape = shape.expand(expr.shape[0], -1)
 
         betas = torch.cat([shape, expr], dim=1)
         full_pose = torch.cat([rotation, neck, jaw, eyes], dim=1)
