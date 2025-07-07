@@ -1,13 +1,14 @@
 ###LCX 20250612 大修改，COPILOT编码。
-###LCX 20250619 修改1：增加了 def compute_loss(self, outputs, batch)。修改2：forward（）。修改3：step()。本次修改见COPILOT-NHA-GPU-20250619A，主要解决GPU显存不足，降��[...]
-###LCX 20250621 修改：回调checkpoints的存放路径，应该统一指定到LCX-ME01/checkpoints里去。LCX20250702DENUG:怀疑RESNET感知模型没有被调用。LCX20250702修改为无条件��[...]
-###LCX20250702 修改，增加了def on_fit_start(self)函数。在RESUME之后检查感知LOSS，如果没有就加载。LCX20250703修改：将感知损失的初始化和设备迁移移到__init__��[...]
+###LCX 20250619 修改1：增加了 def compute_loss(self, outputs, batch)。修改2：forward（）。修改3：step()。本次修改见COPILOT-NHA-GPU-20250619A，主要解决GPU显存不足
+###LCX 20250621 修改：回调checkpoints的存放路径，应该统一指定到LCX-ME01/checkpoints里去。LCX20250702DENUG:怀疑RESNET感知模型没有被调用。LCX20250702修改为无条件
+###LCX20250702 修改，增加了def on_fit_start(self)函数。在RESUME之后检查感知LOSS，如果没有就加载。LCX20250703修改：将感知损失的初始化和设备迁移移到__init_
 ###LCX20250704 修改。281行的参数1.感知损失的模型加载转移到INIT里。
 
 ###LCX20250707修改。339行，FORWARD里的FLAME_OUT增加return_joints=True。
 ###LCX20250707修改，369，403，增加参数resolution。
 ###LCX20250707修改，369，把image修改为RGB。310，FRAME_ID改为：batch["frame"]
 ###LCX20250707增加两个函数：308行，TRAIN_DATALOADER(),VAL_DATALOADER()
+###LCX20250707修改，419，frame_id = batch["frame_id"]修改为：batch["frame"]
 
 import os
 
