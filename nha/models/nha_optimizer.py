@@ -9,7 +9,7 @@
 ###LCX20250707修改，369，把image修改为RGB。修改，395，FRAME_ID改为：batch["frame"]
 ###LCX20250707增加两个函数：308行，TRAIN_DATALOADER(),VAL_DATALOADER()
 ###LCX20250707修改，420，frame_id = batch["frame_id"]修改为：batch["frame"]
-
+###LCX20250707统一447行与FLME.PY文件里的FORWARD，都用位置传参数而不用关键字传参数。
 import os
 
 # Change the current working directory to the root of the cloned repository
@@ -443,14 +443,8 @@ class NHAOptimizer(pl.LightningModule):
             noise = torch.randn_like(rotation) * self.hparams.flame_noise
             rotation = rotation + noise
 
-        # Forward pass through FLAME model
-        flame_output = self._flame(
-            shape_params=shape,
-            expression_params=expr,
-            jaw_pose=jaw_pose,
-            neck_pose=neck_pose,
-            eye_pose=eyes_pose,
-        )
+        # Forward pass through FLAME model ###LCX20250707 FLAME_OUTPUT=SELF._FLAME()应统一用位置传参数而不是用关键字传参数。与FLAME.PY里FORWARD统一。
+        flame_output = self._flame( shape, expr, rotation, neck_pose, jaw_pose, eyes_pose )
         verts = flame_output["vertices"]
         joints = flame_output["joints"]
         lbs_weights = flame_output["lbs_weights"]
