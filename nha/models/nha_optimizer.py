@@ -1,7 +1,8 @@
 ###LCX20250707修改。339行，FORWARD里的FLAME_OUT增加return_joints=True。
 ###LCX20250707修改，308行，frame_id = batch["frame_id"]修改为：frame_id = batch["frame"]
+###LCX20250707修改，363行。normals = self._flame.get_normals(verts_cam)修改为：from nha.util.meshes import vertex_normals  normals = vertex_normals(verts_cam, self._flame.faces.expand(verts_cam.shape[0], -1, -1))
 import os
-
+from nha.util.meshes import vertex_normals
 from nha.models.texture import MultiTexture
 from nha.models.flame import *
 from nha.models.offset_mlp import OffsetMLP
@@ -359,7 +360,8 @@ class NHAOptimizer(pl.LightningModule):
             glob_rot = torch.bmm(noise_rot, glob_rot)
 
         verts_cam = torch.bmm(glob_rot, posed_verts.transpose(1, 2)).transpose(1, 2) + translation.unsqueeze(1)
-        normals = self._flame.get_normals(verts_cam)
+        ### normals = self._flame.get_normals(verts_cam) LCX20260707修改如下：
+        normals = vertex_normals(verts_cam, self._flame.faces.expand(verts_cam.shape[0], -1, -1))
         verts_offset = torch.zeros_like(verts_cam)
         offset_verts = verts_cam[:, self._offset_indices]
 
