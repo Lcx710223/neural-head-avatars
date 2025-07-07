@@ -1,5 +1,5 @@
 ###LCX20250707修改767行。增加了判断。
-
+###LCX20250707在730行增加了注释。
 """
 Code heavily inspired by https://github.com/HavenFeng/photometric_optimization/blob/master/models/FLAME.py. 
 Please consider citing their work if you find this code useful. The code is subject to the license available via
@@ -726,7 +726,7 @@ class FlameHead(nn.Module):
             res[name] = torch.atanh(-2 * r_min / diff - 1)
             # assert (r_min + (torch.tanh(res[name]) + 1) / 2 * diff) < 1e-7
         return res
-
+    ###LCX20250707确认FORWARD传递参数时是位置传而不是通过关键字传。在此传出，在优化器里引用。
     def forward(self,
                 shape,
                 expr,
