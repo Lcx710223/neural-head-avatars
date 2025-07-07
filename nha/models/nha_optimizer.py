@@ -392,7 +392,7 @@ class NHAOptimizer(pl.LightningModule):
 
     def forward(self, batch):
         # Forward pass logic based on the current stage
-        frame_id = batch["frame_id"]
+        frame_id = batch["frame"]###LCX20250707FRAME_ID改为FRAME。
         shape = self._shape
         expr = self._expr[frame_id]
         neck_pose = self._neck_pose[frame_id]
@@ -417,14 +417,8 @@ class NHAOptimizer(pl.LightningModule):
             noise = torch.randn_like(rotation) * self.hparams.flame_noise
             rotation = rotation + noise
 
-        # Forward pass through FLAME model
-        flame_output = self._flame(
-            shape_params=shape,
-            expression_params=expr,
-            jaw_pose=jaw_pose,
-            neck_pose=neck_pose,
-            eye_pose=eyes_pose,
-        )
+        # Forward pass through FLAME model。LCX20250707修改FLAME_OUTPUT的调用方法如下：
+        flame_output = self._flame( shape,expr,rotation,neck_pose,jaw_pose,eyes_pose,)
         verts = flame_output["vertices"]
         joints = flame_output["joints"]
         lbs_weights = flame_output["lbs_weights"]
