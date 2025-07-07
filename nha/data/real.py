@@ -1,3 +1,5 @@
+###20250707在335行增加了返回camera的代码。LCX。
+
 from nha.util.log import get_logger
 from nha.util.general import get_mask_bbox
 from nha.util.render import create_intrinsics_matrix
@@ -331,6 +333,8 @@ class RealDataset(Dataset):
                 assert tr["K"].shape[0] == 3 and tr["K"].shape[1] == 3
                 sample["cam_intrinsic"] = torch.from_numpy(tr["K"]).float()
             sample["cam_extrinsic"] = torch.from_numpy(tr["RT"]).float()
+            ###LCX20250707增加下面的代码，以返回CAMERA:
+            sample["camera"] = { "intrinsic": sample["cam_intrinsic"], "extrinsic": sample["cam_extrinsic"] }
 
         if self._has_light:
             tr = self._tracking_results
