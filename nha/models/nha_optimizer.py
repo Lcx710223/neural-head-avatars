@@ -8,7 +8,7 @@
 ###LCX20250707修改，369，403，增加参数resolution。
 ###LCX20250707修改，369，把image修改为RGB。310，FRAME_ID改为：batch["frame"]
 ###LCX20250707增加两个函数：308行，TRAIN_DATALOADER(),VAL_DATALOADER()
-###LCX20250707修改，419，frame_id = batch["frame_id"]修改为：batch["frame"]
+###LCX20250707修改，420，frame_id = batch["frame_id"]修改为：batch["frame"]
 
 import os
 
@@ -417,7 +417,7 @@ class NHAOptimizer(pl.LightningModule):
 
     def forward(self, batch):
         # Forward pass logic based on the current stage
-        frame_id = batch["frame_id"]
+        frame_id = batch["frame"]
         shape = self._shape
         expr = self._expr[frame_id]
         neck_pose = self._neck_pose[frame_id]
