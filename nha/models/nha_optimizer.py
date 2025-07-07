@@ -6,7 +6,7 @@
 
 ###LCX20250707修改。339行，FORWARD里的FLAME_OUT增加return_joints=True。
 ###LCX20250707修改，369，403，增加参数resolution。
-###LCX20250707修改，369，把image修改为RGB。310，FRAME_ID改为：batch["frame"]
+###LCX20250707修改，369，把image修改为RGB。修改，395，FRAME_ID改为：batch["frame"]
 ###LCX20250707增加两个函数：308行，TRAIN_DATALOADER(),VAL_DATALOADER()
 ###LCX20250707修改，420，frame_id = batch["frame_id"]修改为：batch["frame"]
 
