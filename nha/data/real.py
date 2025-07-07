@@ -311,7 +311,7 @@ class RealDataset(Dataset):
             ).float()
             sample["flame_trans"] = torch.from_numpy(tr["translation"][j]).float()
 
-        # camera
+        # camera。LCX20250707,如果INI里有返回相机参数的要求，则返回内外参。不过，优化器里引用时则是引用了CAMERA，是由内外参合成。
         if self._has_camera:
             tr = self._tracking_results
 
