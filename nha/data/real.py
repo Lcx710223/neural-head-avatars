@@ -1,12 +1,13 @@
 # This code is intended to replace the original data loading logic in the
 # nha/data/real.py file to include 'frame_id' in the batch dictionary and
-# include definitions for CLASS_IDCS and digitize_segmap.
+# include definitions for CLASS_IDCS and digitize_segmap, and add the
+# add_argparse_args method to RealDataModule.
 
 # You will need to manually replace the content of nha/data/real.py with the
 # code below.
 
 """
-Copyright (c) 2023 Lcx710223 20250709 V2
+Copyright (c) 2023 Lcx710223 20250709V3
 This software is licensed under the MIT License.
 """
 
@@ -18,6 +19,7 @@ import cv2
 import numpy as np
 import torch
 from torch.utils.data import Dataset
+import argparse # Import argparse
 
 # Add definitions for CLASS_IDCS and digitize_segmap
 CLASS_IDCS = {
@@ -240,3 +242,23 @@ class RealDataModule(Dataset):
         if any(value is None for value in data.values()):
             return None
         return data
+
+    @staticmethod # Add staticmethod decorator
+    def add_argparse_args(parent_parser):
+        parser = argparse.ArgumentParser(parents=[parent_parser], add_help=False)
+        parser.add_argument('--data_path', type=str, required=True, help='Path to the dataset')
+        parser.add_argument('--split_config', type=str, required=True, help='Path to the split config JSON file')
+        parser.add_argument('--tracking_results_path', type=str, required=True, help='Path to the tracking results NPZ file')
+        parser.add_argument('--load_lmk', type=bool, default=True, help='Load landmarks')
+        parser.add_argument('--load_seg', type=bool, default=True, help='Load segmentation')
+        parser.add_argument('--load_camera', type=bool, default=True, help='Load camera parameters')
+        parser.add_argument('--load_flame', type=bool, default=True, help='Load FLAME parameters')
+        parser.add_argument('--load_normal', type=bool, default=True, help='Load normal maps')
+        parser.add_argument('--load_parsing', type=bool, default=True, help='Load parsing maps')
+        parser.add_argument('--augment', type=bool, default=True, help='Apply data augmentation')
+        parser.add_argument('--img_res', type=tuple, default=(500, 500), help='Image resolution')
+        parser.add_argument('--max_rot', type=float, default=20, help='Maximum rotation for augmentation')
+        parser.add_argument('--max_transl', type=float, default=0.1, help='Maximum translation for augmentation')
+        parser.add_argument('--noise', type=float, default=0.01, help='Noise level for augmentation')
+        parser.add_argument('--jitter', type=float, default=0.02, help='Jitter level for augmentation')
+        return parser
