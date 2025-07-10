@@ -3,6 +3,7 @@
 ### LCX20250622修改了反序列化的代码，主要是加载CKPTS时的信任与安全问题。LCX20250623IMPORT JSON。
 ### LCX20250623修改了：import json ###LCX20250630修改107行，切换训练场景。
 ### LCX 20250710修改了第60行，删掉了不应传递的参数：'data_worker', 'train_batch_size', 'validation_batch_size'
+### LCX20250710修改了125行，180行，181行等。
 
 import time
 from collections import OrderedDict
@@ -122,7 +123,7 @@ def train_pl_module(optimizer_module, data_module, args=None):
             trainer = pl.Trainer.from_argparse_args(
                 args,
                 callbacks=model.callbacks,
-                resume_from_checkpoint=ckpt_path if os.path.isfile(ckpt_path) else None,
+                resume_from_checkpoint=None,
                 max_epochs=stage_jumps[i],
                 logger=experiment_logger
             )
@@ -146,7 +147,7 @@ def train_pl_module(optimizer_module, data_module, args=None):
         if os.path.isfile(ckpt_path):
             model = optimizer_module.load_from_checkpoint(ckpt_path, strict=True, **args_dict).eval().cuda()
             generate_novel_view_folder(model, data, angles=[[0, 0], [-30, 0], [-60, 0]],
-                                    outdir=vis_path, center_novel_views=True)
+                                    output_dir=vis_path)
             os.system(
                 f"for split in train val; do for angle in 0_0 -30_0 -60_0; do ffmpeg -pattern_type glob -i {vis_path}/$split/$angle/'*.png' {vis_path}/{vis_path.parent.name}-$split-$angle.mp4;done;done"
             )
@@ -176,10 +177,8 @@ def train_pl_module(optimizer_module, data_module, args=None):
             with open(eval_path, "w") as f:
                 json.dump(eval_dict, f)  ###需要在顶部加入IMPORT.20250623LCX.
 
-            # scene reconstruction
-            reconstruct_sequence(model_dict, dataset=data._val_set, batch_size=bs,
-                                savepath=str(log_dir / f"SceneReconstruction{model_name}-val.mp4"))
-            reconstruct_sequence(model_dict, dataset=data._train_set, batch_size=bs,
-                                savepath=str(log_dir / f"SceneReconstruction-{model_name}-train.mp4"))
+            # scene reconstruction ###LCX20250710移除参数：dataset 和 batch_size
+            reconstruct_sequence(model_dict, data_module=data,output_dir=str(log_dir / f"SceneReconstruction{model_name}-val.mp4"))
+            reconstruct_sequence(model_dict, data_module=data,output_dir=str(log_dir / f"SceneReconstruction-{model_name}-train.mp4"))
         else:
             print(f"Warning: checkpoint file '{ckpt_path}' not found. Evaluation and reconstruction skipped.")
