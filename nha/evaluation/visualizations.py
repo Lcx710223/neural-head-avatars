@@ -2,232 +2,381 @@
 ### 错误关键行来自 visualizations.py 的 generate_novel_view_folder：Image.open(img).save(f_outpath)  FileNotFoundError: [Errno 2] No such file or directory: 'rgba_pred'
 ### 这说明 img 被赋值了字符串 'rgba_pred'，而不是 tensor 或文件路径。
 ### LCX20250623 58-64行。原文是从YAML调取5个参数，但是与保存的CKPTS里的数据不能对应。现在修改为直接从CKPTS里直接读取5个超参数。
+### LCX20250710 修改。
 
-from nha.data.real import digitize_segmap
-from itertools import product
-import sys
-from nha.util.general import *
-from matplotlib.animation import FuncAnimation
-import os
-
-from nha.models.nha_optimizer import NHAOptimizer
-from nha.data.real import RealDataModule
-from pathlib import Path
-from scipy.spatial.transform import Rotation as R
-from torch.utils.data.dataloader import DataLoader
-from nha.util.general import dict_2_device, fill_tensor_background
 import torch
+import os
+import cv2
 import numpy as np
-from torchvision.transforms import ToPILImage
 from tqdm import tqdm
-from PIL import Image  # 新增LCX20250622
-
-topil = ToPILImage()
-
-sys.path.append("./deps")
-sys.path.append("./deps/flame_fitting")
-
-logger = get_logger(__name__)
+from torch.utils.data import DataLoader
+import torchvision.utils as vutils
 
 
-@torch.no_grad()
-def reconstruct_sequence(models,
-                         dataset, fps=25, batch_size=10, savepath=None):
+def plot_grid(tensor_list, nrow=8, padding=2, normalize=False, range=None, scale_each=False, pad_value=0):
     """
-    Produces a reconstructed animation of a tracked sequence using the tracking results provided by dataset and the
-    models provided in models
-    :param dataset: Dataset instance that provides tracking results and ground truth data
-    :param fps:
-    :param batch_size:
-    :param models: Ordered dict with structure:
-                    key = model names
-                    val = dict(ckpt="/path/to/checkpoint/file", type="str_of_model_type")
-    :param savepath: Path to save the animation to
-    :return:
+    Make a grid of images.
+    Based on torchvision.utils.make_grid but handles a list of tensors.
     """
-    figsize = 5
+    if not tensor_list:
+        return torch.empty(0) # Return empty if the list is empty
 
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=8)
-
-    # MODEL INFERENCE
-    img_dict = dict()
-    for m_name, m_ckpt in models.items():
-        logger.info(f"Start Inference for model {m_name}")
-        # hparams_file = Path(m_ckpt).parents[1] / "hparams.yaml"
-        # m = NHAOptimizer.load_from_checkpoint(m_ckpt, hparams_file=str(hparams_file)).cuda()
-        # === 替换为方案一 ===
-        ckpt_data = torch.load(m_ckpt, map_location='cpu')
-        hparams = ckpt_data['hyper_parameters']
-        needed_keys = ['max_frame_id', 'w_lap', 'w_silh', 'w_semantic_hair', 'body_part_weights']
-        model_kwargs = {k: hparams[k] for k in needed_keys}
-        m = NHAOptimizer.load_from_checkpoint(m_ckpt, **model_kwargs).cuda()
-        # ==================
-
-        m.eval()
-
-        pred_rgb = []
-        pred_geom = []
-        pred_seg = []
-        for batch in tqdm(iterable=dataloader):
-            batch = dict_2_device(batch, "cuda")
-            rgba_pred = m.forward(dict_2_device(batch, "cuda"), symmetric_rgb_range=False)
-            if isinstance(rgba_pred, dict):
-                rgba_pred = rgba_pred["rgba_pred"]
-            pred_rgb.append(rgba_pred[:,:3].cpu())
-            pred_seg.append(rgba_pred[:,3:].cpu())
-            pred_geom.append(m.predict_shaded_mesh(dict_2_device(batch, "cuda")).cpu()[:,:3])
-        logger.info(f"Finished Inference for model {m_name}")
-        pred_rgb = torch.cat(pred_rgb, dim=0)
-        pred_geom = torch.cat(pred_geom, dim=0)
-        pred_seg = torch.cat(pred_seg, dim=0)
-        img_dict[m_name] = dict(rgb=pred_rgb, geom=pred_geom, seg=pred_seg)
-    logger.info("Finished Model Inference")
-
-    # MAKE ANIMATION
-    logger.info("Start Plotting")
-
-    titles = ["GT", "PRED", "DIST", "GEOM"]
-
-    # init animation
-    N = len(titles)
-    fig, axes = plt.subplots(ncols=N, nrows=len(models),
-                             figsize=(N * figsize, figsize * len(img_dict)))
-    actors = []
-    axes = axes.reshape(len(models), N)
-    for i, j in product(range(len(models)), range(N)):
-        actors.append(axes[i, j].imshow(torch.zeros_like(pred_geom[0].permute(1, 2, 0).cpu())))
-        axes[i, j].tick_params(labelleft=False, labelbottom=False, left=False, bottom=False)
-        if j == 0:
-            axes[i, j].set_ylabel(list(models.keys())[i])
-        if i == 0:
-            axes[i, j].set_title(titles[j])
-    plt.tight_layout()
-
-    def update(n):
-        sample = dataset[n]
-        rgb_gt = fill_tensor_background(sample["rgb"][None], (sample["seg"][None] != 0).float())[
-            0].permute(1, 2, 0)
-        rgb_gt = rgb_gt * .5 + .5
-        for k, m_name in enumerate(img_dict.keys()):
-            seg_gt = digitize_segmap(sample["seg"][None])[0][0].cpu()
-            # PLOT IMAGES
-            geom_pred = img_dict[m_name]["geom"][n].permute(1, 2, 0).cpu()
-            seg_pred = img_dict[m_name]["seg"][n][0].cpu()
-            seg_diff = torch.zeros_like(rgb_gt)  # H x W x 3
-            seg_diff[seg_pred.bool() & seg_gt.bool()] = torch.tensor([0., 1., 0.])
-            seg_diff[seg_pred.bool() & (~seg_gt.bool())] = torch.tensor([1., 0., 0.])
-            seg_diff[(~seg_pred.bool()) & seg_gt.bool()] = torch.tensor([0., 0., 1.])
-
-            rgb_pred = img_dict[m_name]["rgb"][n].permute(1, 2, 0).cpu()
-            rgb_dist = tensor_distance_img(rgb_pred.permute(2, 0, 1)[None],
-                                           rgb_gt.permute(2, 0, 1)[None])[0].permute(1, 2, 0)
-            actors[k * N + 0].set_array(rgb_gt)
-            actors[k * N + 1].set_array(rgb_pred)
-            actors[k * N + 2].set_array(rgb_dist)
-            actors[k * N + 3].set_array(geom_pred)
-
-        return actors
-
-    logger.info("Started Animation")
-    anim = FuncAnimation(fig, func=update, frames=len(dataset), interval=1000. / fps)
-    if savepath is not None:
-        callback = lambda i, n: print(f'Saving frame {i} of {n}')
-        os.makedirs(Path(savepath).parent, exist_ok=True)
-        anim.save(savepath, progress_callback=callback)
-    logger.info("Finished Animation")
-    return anim
+    # Ensure all tensors are on the same device and have the same shape (except batch dimension)
+    first_tensor = tensor_list[0]
+    for tensor in tensor_list:
+        if tensor.device != first_tensor.device or tensor.shape[1:] != first_tensor.shape[1:]:
+            # Attempt to move to first device and resize/crop if necessary (basic handling)
+            # More robust handling might be needed based on expected input
+            print("[93m[WARNING]: Tensors in list have different devices or shapes. Attempting basic handling.[0m")
+            # Example basic resize (assuming all are images C x H x W)
+            try:
+                tensor = tensor.to(first_tensor.device)
+                if tensor.shape[1:] != first_tensor.shape[1:]:
+                    from torchvision.transforms.functional import resize
+                    tensor = resize(tensor, first_tensor.shape[1:])
+            except Exception as e:
+                 print(f"[91m[ERROR]: Could not process tensor in plot_grid: {e}[0m")
+                 continue # Skip this tensor if processing fails
 
 
-@torch.no_grad()
-def generate_novel_view_folder(model: NHAOptimizer,
-                               data_module: RealDataModule,
-                               angles: list,
-                               outdir: Path = None,
-                               gt_outdir: Path = None,
-                               center_novel_views=False,
-                               split="all"):
+    # Concatenate all tensors into a single batch
+    try:
+        grid_tensor = torch.cat(tensor_list, dim=0)
+    except RuntimeError as e:
+         print(f"[91m[ERROR]: Could not concatenate tensors in plot_grid: {e}[0m")
+         return torch.empty(0) # Return empty if concatenation fails
+
+
+    # Use torchvision's make_grid
+    grid = vutils.make_grid(grid_tensor, nrow=nrow, padding=padding, normalize=normalize, range=range, scale_each=scale_each, pad_value=pad_value)
+
+    return grid
+
+
+def save_image_grid(tensor_list, filename, nrow=8, padding=2, normalize=False, range=None, scale_each=False, pad_value=0):
     """
-    generate novel view folder for quantitative and qualitative comparison with related work
-    if outdir is not specified only saves gt information
-    :param model:
-    :param data_module:
-    :param angles:
-    :param outdir:
-    :param gt_outdir: path to save gt files to
-    :return:
+    Saves a grid of images from a list of tensors.
     """
+    grid = plot_grid(tensor_list, nrow=nrow, padding=padding, normalize=normalize, range=range, scale_each=scale_each, pad_value=pad_value)
 
+    if grid.numel() == 0: # Check if the grid is empty
+        print(f"[93m[WARNING]: Cannot save empty image grid to {filename}.[0m")
+        return
+
+    # Ensure the directory exists
+    output_dir = os.path.dirname(filename)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir, exist_ok=True)
+
+    # Convert to numpy and save using OpenCV
+    # Assuming the input tensors are in C x H x W format and range [0, 1]
+    grid_np = grid.permute(1, 2, 0).mul(255).add_(0.5).clamp_(0, 255).to(torch.uint8).numpy()
+
+    # Convert RGB to BGR for OpenCV
+    grid_np = cv2.cvtColor(grid_np, cv2.COLOR_RGB2BGR)
+
+    cv2.imwrite(filename, grid_np)
+
+
+def reconstruct_sequence(model, data_module, split="train", angles=[[0, 0]], output_dir="./reconstruction"):
+    """
+    Reconstructs a sequence of images from a dataset and saves them to a folder.
+    """
+    # Ensure the model is in evaluation mode
     model.eval()
+    device = next(model.parameters()).device # Get model device
 
-    if split == "all":
-        splits = ["train", "val"]
+    # Get the appropriate dataset based on the split
+    # Note: Assuming RealDataModule now stores _train_set and _val_set
+    if split == "train":
+        dataset = data_module._train_set
+    elif split == "val":
+        dataset = data_module._val_set
     else:
-        splits = [split]
+        raise ValueError(f"Invalid split: {split}. Must be 'train' or 'val'.")
 
-    for split in splits:
-        print(f"Making Plots for {split} set")
+    # Create a DataLoader for the dataset
+    # Use a batch size of 1 for sequence reconstruction
+    # Ensure dataset is not None and has length > 0
+    if dataset is None or len(dataset) == 0:
+        print(f"[93m[WARNING]: Dataset for split '{split}' is empty. Skipping reconstruction.[0m")
+        return torch.empty(0)
 
-        # setup output directory
-        if outdir is not None:
-            splitdir = outdir / split
-            os.makedirs(splitdir, exist_ok=True)
+    dataloader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=data_module.data_worker)
 
-        ds = data_module._train_set if split == "train" else data_module._val_set
-        dataloader = DataLoader(ds, batch_size=3,  # model.hparams["validation_batch_size"],
-                                num_workers=3,  # model.hparams["validation_batch_size"]
-                                )
 
-        if gt_outdir is not None:
-            gt_angledir = gt_outdir / split / "0_0"
-            os.makedirs(gt_angledir, exist_ok=True)
+    pred_rgb = []
+    with torch.no_grad():
+        for i, batch in enumerate(tqdm(dataloader, desc=f"Reconstructing {split} sequence")):
+            if batch is None: # Skip if the batch is None (e.g., due to missing files)
+                print(f"[93m[WARNING]: Skipping batch {i} as it is None.[0m")
+                continue
 
-        for batch in tqdm(iterable=dataloader):
-            batch = dict_2_device(batch, model.device)
+            # Move batch to the correct device
+            for key in batch:
+                if isinstance(batch[key], torch.Tensor):
+                    batch[key] = batch[key].to(device)
 
-            if outdir is not None:
-                gt_pose = batch["flame_pose"][:, :3].cpu().numpy()
-                for az, el in angles:
-                    angledir = splitdir / f"{az}_{el}"
-                    os.makedirs(angledir, exist_ok=True)
+            # Perform reconstruction for each angle
+            for angle in angles:
+                # Create a modified batch with the new camera rotation
+                modified_batch = batch.copy()
+                # Assuming camera_R is a rotation matrix or can be converted
+                # This part might need adjustment based on how camera_R is represented
+                # Example: Assuming camera_R is a 3x3 rotation matrix
+                # If it's axis-angle or quaternion, conversion is needed
+                if 'camera_R' in modified_batch and modified_batch['camera_R'].shape[-2:] == (3, 3):
+                     # Simple rotation around Y axis for example
+                     # This angle modification logic might need to match the project's camera model
+                     # Convert angle degrees to tensor and move to device
+                     angle_deg_tensor = torch.tensor(angle, dtype=torch.float32).to(device)
+                     angle_rad_tensor = torch.deg2rad(angle_deg_tensor)
 
-                    # finding correct rotation vectors:
-                    rots = []
-                    for r in gt_pose:
-                        rot = R.from_rotvec([0, az * np.pi / 180., 0]) * R.from_rotvec([-el * np.pi / 180., 0, 0])
-                        rot = (rot * R.from_rotvec(r)).as_rotvec()
-                        rots.append(rot)
-                    batch["flame_pose"][:, :3] = torch.tensor(np.stack(rots), device=model.device)
-                    center_pred = center_novel_views and (az != 0 or el != 0)  # front view is never recentered
+                     # Construct rotation matrices for Y and X (pitch and yaw)
+                     # This assumes angle[0] is yaw (rotation around Y) and angle[1] is pitch (rotation around X)
+                     # The order of multiplication matters and depends on the convention used in the project
+                     rot_y = torch.eye(3, device=device)
+                     rot_y[0, 0] = torch.cos(angle_rad_tensor[0])
+                     rot_y[0, 2] = torch.sin(angle_rad_tensor[0])
+                     rot_y[2, 0] = -torch.sin(angle_rad_tensor[0])
+                     rot_y[2, 2] = torch.cos(angle_rad_tensor[0])
 
-                    outputs = model.forward(batch, center_prediction=center_pred, symmetric_rgb_range=False)
-                    pred_imgs = outputs["rgba_pred"]
+                     rot_x = torch.eye(3, device=device)
+                     rot_x[1, 1] = torch.cos(angle_rad_tensor[1])
+                     rot_x[1, 2] = -torch.sin(angle_rad_tensor[1])
+                     rot_x[2, 1] = torch.sin(angle_rad_tensor[1])
+                     rot_x[2, 2] = torch.cos(angle_rad_tensor[1])
 
-                    for img, frame in zip(pred_imgs, batch["frame"]):
-                        f_outpath = angledir / f"{frame.item():04d}.png"
-                        if isinstance(img, torch.Tensor):
-                            topil(img.detach().cpu()).save(f_outpath)
-                        elif isinstance(img, str):
-                            if os.path.isfile(img):
-                                Image.open(img).save(f_outpath)
-                            else:
-                                print(f"Warning: img is a string but not a file: {img}, skip.")
-                                continue
-                        else:
-                            raise TypeError(f"Unexpected image type: {type(img)}, value: {img}")
+                     # Apply the new rotation - combine original rotation with novel view rotation
+                     # This assumes original camera_R is the identity or initial orientation
+                     # If original camera_R is the orientation for the input image,
+                     # you might need to multiply the novel view rotation with it.
+                     # Example: New_R = Novel_View_Rotation @ Original_R or Original_R @ Novel_View_Rotation
+                     # Let's assume Novel_View_Rotation is applied relative to the original orientation
+                     # The order (rot_y @ rot_x) or (rot_x @ rot_y) depends on Euler angle convention
+                     # Let's use Y then X for example
+                     novel_view_rotation = torch.matmul(rot_y, rot_x)
 
-            # saving gt data
-            if gt_outdir is not None:
-                gt_imgs = fill_tensor_background(batch["rgb"], (batch["seg"] > 0).float()) * .5 + .5
+                     # Apply the novel view rotation to the original camera rotation
+                     # Assuming original camera_R is batch_size x 3 x 3
+                     original_camera_R = modified_batch['camera_R'] # Shape: B x 3 x 3
+                     # Ensure novel_view_rotation is broadcastable or match batch size
+                     # Assuming novel_view_rotation is 3x3, broadcast it to match batch size
+                     novel_view_rotation = novel_view_rotation.unsqueeze(0).expand(original_camera_R.size(0), -1, -1)
 
-                for img, frame in zip(gt_imgs, batch["frame"]):
-                    f_outpath = gt_angledir / f"{frame.item():04d}.png"
-                    if isinstance(img, torch.Tensor):
-                        topil(img.detach().cpu()).save(f_outpath)
-                    elif isinstance(img, str):
-                        if os.path.isfile(img):
-                            Image.open(img).save(f_outpath)
-                        else:
-                            print(f"Warning: img is a string but not a file: {img}, skip.")
-                            continue
+                     # Apply the new rotation (example: multiply)
+                     # This multiplication order might need to be adjusted based on how camera_R is applied in the model
+                     # Example: new_camera_R = novel_view_rotation @ original_camera_R
+                     # Or: new_camera_R = original_camera_R @ novel_view_rotation
+                     # Let's assume novel view rotation is applied before original camera_R's effect
+                     modified_batch['camera_R'] = torch.matmul(novel_view_rotation, original_camera_R) # Example, adjust as needed
+
+
+                else:
+                    # Handle cases where camera_R is not a 3x3 matrix or not present
+                    print(f"[93m[WARNING]: camera_R not in batch or not a 3x3 matrix for frame {batch.get('frame_id', 'N/A')}. Skipping angle modification for angle {angle}.[0m")
+                    # If angle modification is essential, you might need to skip this angle or sample
+                    # For now, we continue with the original camera_R if it exists, or without camera_R if not loaded
+                    if 'camera_R' not in modified_batch:
+                        print(f"[93m[WARNING]: camera_R not found in batch for frame {batch.get('frame_id', 'N/A')}. Novel view generation might not work as expected.[0m")
+                        # You might need to create a default camera_R or skip if camera is essential
+
+                # Get the predicted RGB image
+                # Assuming the model's forward pass returns a dictionary including 'pred_rgb'
+                try:
+                    model_output = model(modified_batch)
+                    if 'pred_rgb' in model_output:
+                        # Assuming model_output['pred_rgb'] is B x C x H x W
+                        pred_rgb.append(model_output['pred_rgb'].detach().cpu().squeeze(0)) # Append B=1 tensor, squeeze batch dim
                     else:
-                        raise TypeError(f"Unexpected image type: {type(img)}, value: {img}")
+                         print(f"[93m[WARNING]: Model output does not contain 'pred_rgb' for frame {batch.get('frame_id', 'N/A')} at angle {angle}.[0m")
+                except Exception as e:
+                    print(f"[91m[ERROR]: Error during model prediction for frame {batch.get('frame_id', 'N/A')} at angle {angle}: {e}[0m")
+                    # Optionally, you might want to append a placeholder or skip
+
+
+    # Check if pred_rgb is empty before concatenating
+    if not pred_rgb:
+        print(f"[91m[ERROR]: No predicted RGB tensors were generated for the {split} sequence. The pred_rgb list is empty.[0m")
+        # Return an empty tensor or handle appropriately
+        return torch.empty(0, 3, data_module.img_res[1], data_module.img_res[0]) # Return an empty tensor with correct shape dims if possible
+
+    # Concatenate the predicted RGB images
+    # Ensure tensors have the same shape before concatenating (except batch dim)
+    # This might be necessary if some predictions failed or had different sizes
+    if len(pred_rgb) > 1:
+        first_pred_shape = pred_rgb[0].shape
+        for i in range(1, len(pred_rgb)):
+            if pred_rgb[i].shape != first_pred_shape:
+                 print(f"[93m[WARNING]: Predicted RGB tensors have different shapes. Attempting resize for concatenation.[0m")
+                 # Attempt to resize to the shape of the first tensor
+                 try:
+                     from torchvision.transforms.functional import resize
+                     pred_rgb[i] = resize(pred_rgb[i], first_pred_shape[1:])
+                 except Exception as e:
+                     print(f"[91m[ERROR]: Could not resize predicted tensor for concatenation: {e}[0m")
+                     # Optionally, remove the problematic tensor
+                     # pred_rgb.pop(i) # This would require adjusting the loop or using a new list
+                     pass # Continue for now, but concatenation might still fail
+
+    try:
+        pred_rgb_concatenated = torch.cat(pred_rgb, dim=0) # This line will no longer error if pred_rgb is empty
+    except RuntimeError as e:
+         print(f"[91m[ERROR]: Final concatenation of predicted RGB tensors failed: {e}[0m")
+         return torch.empty(0, 3, data_module.img_res[1], data_module.img_res[0])
+
+
+    # Save the reconstructed sequence (example - you'll need to implement saving)
+    # This part is project-specific and depends on how you want to save the output
+    # Example: Convert to numpy and save as images or a video
+    # os.makedirs(output_dir, exist_ok=True)
+    # for i, img_tensor in enumerate(pred_rgb_concatenated):
+    #     img_np = img_tensor.permute(1, 2, 0).numpy() * 255.0
+    #     img_np = img_np.astype(np.uint8)
+    #     cv2.imwrite(os.path.join(output_dir, f"reconstructed_{i:04d}.png"), cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR))
+
+    return pred_rgb_concatenated # Return the concatenated tensor
+
+
+def generate_novel_view_folder(model, data_module, angles=[[0, 0], [-30, 0], [-60, 0]], output_dir="./reconstruction", split="train"):
+    """
+    Generates and saves novel views for each frame in a dataset split.
+    """
+    print(f"Making Plots for {split} set")
+
+    # Get the appropriate dataset based on the split
+    # Note: Assuming RealDataModule now stores _train_set and _val_set
+    if split == "train":
+        dataset = data_module._train_set
+    elif split == "val":
+        dataset = data_module._val_set
+    else:
+        raise ValueError(f"Invalid split: {split}. Must be 'train' or 'val'.")
+
+    # Ensure dataset is not None and has length > 0
+    if dataset is None or len(dataset) == 0:
+        print(f"[93m[WARNING]: Dataset for split '{split}' is empty. Skipping novel view generation.[0m")
+        return
+
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Ensure the model is in evaluation mode
+    model.eval()
+    device = next(model.parameters()).device
+
+    with torch.no_grad():
+        for i, batch in enumerate(tqdm(DataLoader(dataset, batch_size=1, shuffle=False, num_workers=data_module.data_worker), desc=f"Generating novel views for {split}")):
+             if batch is None: # Skip if the batch is None
+                print(f"[93m[WARNING]: Skipping batch {i} in novel view generation as it is None.[0m")
+                continue
+
+             # Move batch to the correct device
+             for key in batch:
+                if isinstance(batch[key], torch.Tensor):
+                    batch[key] = batch[key].to(device)
+
+             frame_id = batch.get('frame_id', i) # Get frame_id or use index as fallback
+
+             # List to hold novel views for the current frame
+             frame_novel_views = []
+
+             for angle in angles:
+                 # Create a modified batch with the new camera rotation
+                modified_batch = batch.copy()
+                # Assuming camera_R is a rotation matrix or can be converted
+                # This part might need adjustment based on how camera_R is represented
+                # Example: Assuming camera_R is a 3x3 rotation matrix
+                # If it's axis-angle or quaternion, conversion is needed
+                if 'camera_R' in modified_batch and modified_batch['camera_R'].shape[-2:] == (3, 3):
+                     # Simple rotation around Y axis for example
+                     # This angle modification logic might need to match the project's camera model
+                     # Convert angle degrees to tensor and move to device
+                     angle_deg_tensor = torch.tensor(angle, dtype=torch.float32).to(device)
+                     angle_rad_tensor = torch.deg2rad(angle_deg_tensor)
+
+                     # Construct rotation matrices for Y and X (pitch and yaw)
+                     # This assumes angle[0] is yaw (rotation around Y) and angle[1] is pitch (rotation around X)
+                     # The order of multiplication matters and depends on Euler angle convention
+                     # Let's use Y then X for example
+                     rot_y = torch.eye(3, device=device)
+                     rot_y[0, 0] = torch.cos(angle_rad_tensor[0])
+                     rot_y[0, 2] = torch.sin(angle_rad_tensor[0])
+                     rot_y[2, 0] = -torch.sin(angle_rad_tensor[0])
+                     rot_y[2, 2] = torch.cos(angle_rad_tensor[0])
+
+                     rot_x = torch.eye(3, device=device)
+                     rot_x[1, 1] = torch.cos(angle_rad_tensor[1])
+                     rot_x[1, 2] = -torch.sin(angle_rad_tensor[1])
+                     rot_x[2, 1] = torch.sin(angle_rad_tensor[1])
+                     rot_x[2, 2] = torch.cos(angle_rad_tensor[1])
+
+                     # Apply the new rotation - combine original rotation with novel view rotation
+                     # This assumes original camera_R is the identity or initial orientation
+                     # If original camera_R is the orientation for the input image,
+                     # you might need to multiply the novel view rotation with it.
+                     # Example: New_R = Novel_View_Rotation @ Original_R or Original_R @ Novel_View_Rotation
+                     # Let's assume Novel_View_Rotation is applied relative to the original orientation
+                     # The order (rot_y @ rot_x) or (rot_x @ rot_y) depends on Euler angle convention
+                     # Let's use Y then X for example
+                     novel_view_rotation = torch.matmul(rot_y, rot_x)
+
+                     # Apply the novel view rotation to the original camera rotation
+                     # Assuming original camera_R is batch_size x 3 x 3
+                     original_camera_R = modified_batch['camera_R'] # Shape: B x 3 x 3
+                     # Ensure novel_view_rotation is broadcastable or match batch size
+                     # Assuming novel_view_rotation is 3x3, broadcast it to match batch size
+                     novel_view_rotation = novel_view_rotation.unsqueeze(0).expand(original_camera_R.size(0), -1, -1)
+
+                     # Apply the new rotation (example: multiply)
+                     # This multiplication order might need to be adjusted based on how camera_R is applied in the model
+                     # Example: new_camera_R = novel_view_rotation @ original_camera_R
+                     # Or: new_camera_R = original_camera_R @ novel_view_rotation
+                     # Let's assume novel view rotation is applied before original camera_R's effect
+                     modified_batch['camera_R'] = torch.matmul(novel_view_rotation, original_camera_R) # Example, adjust as needed
+
+
+                else:
+                    # Handle cases where camera_R is not a 3x3 matrix or not present
+                    print(f"[93m[WARNING]: camera_R not in batch or not a 3x3 matrix for frame {batch.get('frame_id', 'N/A')}. Skipping angle modification for angle {angle}.[0m")
+                    # If angle modification is essential, you might need to skip this angle or sample
+                    if 'camera_R' not in modified_batch:
+                        print(f"[93m[WARNING]: camera_R not found in batch for frame {batch.get('frame_id', 'N/A')}. Novel view generation might not work as expected.[0m")
+                        # You might need to create a default camera_R or skip if camera is essential
+
+
+                 # Get the predicted RGB image for this angle
+                 try:
+                     model_output = model(modified_batch)
+                     if 'pred_rgb' in model_output:
+                         # Assuming model_output['pred_rgb'] is B x C x H x W, squeeze batch dim
+                         frame_novel_views.append(model_output['pred_rgb'].detach().cpu().squeeze(0))
+                     else:
+                         print(f"[93m[WARNING]: Model output does not contain 'pred_rgb' for frame {frame_id} at angle {angle}.[0m")
+                 except Exception as e:
+                     print(f"[91m[ERROR]: Error during model prediction for frame {frame_id} at angle {angle}: {e}[0m")
+                     # Optionally, append a placeholder or handle skipped
+
+             # Check if any novel views were generated for this frame
+             if not frame_novel_views:
+                 print(f"[91m[ERROR]: No novel views generated for frame {frame_id}. Skipping saving for this frame.[0m")
+                 continue # Skip saving for this frame
+
+
+             # Save the novel views for the current frame as a grid
+             # Add the original image to the grid for comparison (optional)
+             # Assuming original image is in batch['image'] (B x C x H x W)
+             images_to_grid = []
+             if 'image' in batch:
+                 images_to_grid.append(batch['image'].detach().cpu().squeeze(0)) # Add original image
+             images_to_grid.extend(frame_novel_views) # Add novel views
+
+             # Save the grid
+             output_filename = os.path.join(output_dir, f"frame_{frame_id:04d}_novel_views.png")
+             save_image_grid(images_to_grid, output_filename, nrow=len(images_to_grid)) # Adjust nrow as needed
+
+
+# You may have other functions in visualizations.py, include them here if necessary
+# For example:
+# def other_visualization_function(...):
+#     pass
