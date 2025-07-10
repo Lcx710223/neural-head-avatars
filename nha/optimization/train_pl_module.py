@@ -2,6 +2,7 @@
 ### 保存、resume、评估都用LCX-ME01/checkpoints/last.ckpt。不再用Lightning自动拼出的version_x/checkpoints路径。只需保证dirpath和resume_from_checkpoint一致，且都用绝对路径。
 ### LCX20250622修改了反序列化的代码，主要是加载CKPTS时的信任与安全问题。LCX20250623IMPORT JSON。
 ### LCX20250623修改了：import json ###LCX20250630修改107行，切换训练场景。
+### LCX 20250710修改了第60行，删掉了不应传递的参数：'data_worker', 'train_batch_size', 'validation_batch_size'
 
 import time
 from collections import OrderedDict
@@ -54,10 +55,19 @@ def train_pl_module(optimizer_module, data_module, args=None):
 
     print(f"Start Model training with the following configuration: \n {parser.format_values()}")
 
+    # 定义 RealDataModule 需要的参数列表
+    real_data_module_args = [
+        'data_path', 'split_config', 'tracking_results_path', 'load_lmk',
+        'load_seg', 'load_camera', 'load_flame', 'load_normal', 'load_parsing',
+        'augment', 'img_res', 'max_rot', 'max_transl', 'noise', 'jitter' ]
+
+    # 创建一个新的字典，只包含 RealDataModule 需要的参数
+    filtered_args_dict = {k: v for k, v in args_dict.items() if k in real_data_module_args}
+
     # init datamodule
     while True:
         try:
-            data = data_module(**args_dict)
+            data = data_module(**filtered_args_dict) # 使用过滤后的字典
             data.setup()
             break
         except FileNotFoundError as e1:
@@ -119,8 +129,9 @@ def train_pl_module(optimizer_module, data_module, args=None):
 
             trainer.fit(
                 model,
-                train_dataloaders=data.train_dataloader(batch_size=data._train_batch[i]),
-                val_dataloaders=data.val_dataloader(batch_size=data._val_batch[i])
+                train_dataloaders=data.train_dataloader( ),
+                val_dataloaders=data.val_dataloader( ),
+                ckpt_path=None, # 明确指定不从检查点恢复LCX20250710 
             )
 
             # 每次都保存到同一个ckpt
