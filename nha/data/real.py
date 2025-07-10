@@ -7,7 +7,7 @@
 # code below.
 
 """
-Copyright (c) 2023 Lcx710223 20250709V3
+Copyright (c) 2023 Lcx710223 V20250710
 This software is licensed under the MIT License.
 """
 
@@ -18,8 +18,10 @@ import os
 import cv2
 import numpy as np
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader # Import DataLoader
 import argparse # Import argparse
+from pytorch_lightning import LightningDataModule # Import LightningDataModule
+
 
 # Add definitions for CLASS_IDCS and digitize_segmap
 CLASS_IDCS = {
@@ -83,12 +85,170 @@ def load_all_samples(data_path):
     return frame_dirs
 
 
-class RealDataModule(Dataset):
+class RealDataModule(LightningDataModule): # Inherit from LightningDataModule
     def __init__(
         self,
         data_path,
         split_config,
         tracking_results_path,
+        data_worker=0, # Add data_worker here
+        train_batch_size=[2, 1, 1], # Add batch sizes here
+        validation_batch_size=[2, 1, 1], # Add batch sizes here
+        load_lmk=True,
+        load_seg=True,
+        load_camera=True,
+        load_flame=True,
+        load_normal=True,
+        load_parsing=True,
+        augment=True,
+        img_res=(500, 500),
+        max_rot=20,
+        max_transl=0.1,
+        noise=0.01,
+        jitter=0.02,
+    ):
+        super().__init__() # Call parent constructor
+        self.data_path = data_path
+        self.split_config = split_config
+        self.tracking_results_path = tracking_results_path
+        self.data_worker = data_worker # Store data_worker
+        self.train_batch_size = train_batch_size # Store batch sizes
+        self.validation_batch_size = validation_batch_size # Store batch sizes
+        self.load_lmk = load_lmk
+        self.load_seg = load_seg
+        self.load_camera = load_camera
+        self.load_flame = load_flame
+        self.load_normal = load_normal
+        self.load_parsing = load_parsing
+        self.augment = augment
+        self.img_res = img_res
+        self.max_rot = max_rot
+        self.max_transl = max_transl
+        self.noise = noise
+        self.jitter = jitter
+
+        self.train_frame_ids = []
+        self.val_frame_ids = []
+        self.all_frame_ids = [] # Added to store all frame IDs
+        self.max_frame_id = 0 # Added to store the maximum frame ID
+        self.tracking_results = None
+        self.tracking_results_dict = {}
+
+
+    def setup(self, stage=None):
+        """Load data for training and validation."""
+        with open(self.split_config, "r") as f:
+            split = json.load(f)
+
+        all_frame_dirs = glob.glob(f"{self.data_path}/frame_*")
+        self.all_frame_ids = sorted([int(os.path.basename(d).split('_')[-1]) for d in all_frame_dirs if os.path.isdir(d)]) # Get all frame IDs
+
+        if self.all_frame_ids:
+            self.max_frame_id = max(self.all_frame_ids) # Calculate max frame ID
+
+        self.train_frame_ids = [i for i in split["train"] if os.path.exists(os.path.join(self.data_path, f"frame_{i}"))]
+        self.val_frame_ids = [i for i in split["val"] if os.path.exists(os.path.join(self.data_path, f"frame_{i}"))]
+
+        print(f"[92m[07/06 02:41:29 nha.data.real]: [0mCollected real training dataset containing: {len(self.train_frame_ids)} samples.")
+        print(f"[92m[07/06 02:41:29 nha.data.real]: [0mCollected real validation dataset containing: {len(self.val_frame_ids)} samples.")
+
+
+        # Load tracking results during setup
+        if self.load_flame:
+            self.tracking_results = np.load(self.tracking_results_path, allow_pickle=True)
+            # Convert tracking results to a dictionary for easier lookup by frame_id
+            # Filter out keys that cannot be converted to integers (non-frame IDs)
+            self.tracking_results_dict = {}
+            for k, v in self.tracking_results.items():
+                try:
+                    self.tracking_results_dict[int(k)] = v
+                except ValueError:
+                    # Skip keys that are not integer frame IDs
+                    pass
+
+
+    def prepare_data(self):
+        """Download data if needed. Not implemented for this dataset."""
+        pass
+
+    def train_dataloader(self):
+        """Returns the training DataLoader."""
+        train_dataset = RealDataset( # Create a separate Dataset class for train/val
+            self.data_path,
+            self.train_frame_ids,
+            self.tracking_results_dict, # Pass the loaded tracking results dict
+            load_lmk=self.load_lmk,
+            load_seg=self.load_seg,
+            load_camera=self.load_camera,
+            load_flame=self.load_flame,
+            load_normal=self.load_normal,
+            load_parsing=self.load_parsing,
+            augment=self.augment,
+            img_res=self.img_res,
+            max_rot=self.max_rot,
+            max_transl=self.max_transl,
+            noise=self.noise,
+            jitter=self.jitter,
+        )
+        # Use the first element of train_batch_size list for the DataLoader
+        return DataLoader(train_dataset, batch_size=self.train_batch_size[0], num_workers=self.data_worker)
+
+    def val_dataloader(self):
+        """Returns the validation DataLoader."""
+        val_dataset = RealDataset( # Create a separate Dataset class for train/val
+            self.data_path,
+            self.val_frame_ids,
+            self.tracking_results_dict, # Pass the loaded tracking results dict
+            load_lmk=self.load_lmk,
+            load_seg=self.load_seg,
+            load_camera=self.load_camera,
+            load_flame=self.load_flame,
+            load_normal=self.load_normal,
+            load_parsing=self.load_parsing,
+            augment=False, # No augmentation for validation
+            img_res=self.img_res,
+            max_rot=self.max_rot,
+            max_transl=self.max_transl,
+            noise=self.noise,
+            jitter=self.jitter,
+        )
+         # Use the second element of validation_batch_size list for the DataLoader
+        return DataLoader(val_dataset, batch_size=self.validation_batch_size[0], num_workers=self.data_worker)
+
+
+    @staticmethod # Add staticmethod decorator
+    def add_argparse_args(parent_parser):
+        parser = argparse.ArgumentParser(parents=[parent_parser], add_help=False)
+        parser.add_argument('--data_path', type=str, required=True, help='Path to the dataset')
+        parser.add_argument('--split_config', type=str, required=True, help='Path to the split config JSON file')
+        parser.add_argument('--tracking_results_path', type=str, required=True, help='Path to the tracking results NPZ file')
+        # Add the missing arguments
+        parser.add_argument('--data_worker', type=int, default=0, help='Number of data workers')
+        # Change nargs for batch sizes to handle list input
+        parser.add_argument('--train_batch_size', type=int, nargs='+', default=[2, 1, 1], help='Training batch size for different stages')
+        parser.add_argument('--validation_batch_size', type=int, nargs='+', default=[2, 1, 1], help='Validation batch size for different stages')
+        parser.add_argument('--load_lmk', type=bool, default=True, help='Load landmarks')
+        parser.add_argument('--load_seg', type=bool, default=True, help='Load segmentation')
+        parser.add_argument('--load_camera', type=bool, default=True, help='Load camera parameters')
+        parser.add_flame = parser.add_argument('--load_flame', type=bool, default=True, help='Load FLAME parameters')
+        parser.add_argument('--load_normal', type=bool, default=True, help='Load normal maps')
+        parser.add_argument('--load_parsing', type=bool, default=True, help='Load parsing maps')
+        parser.add_argument('--augment', type=bool, default=True, help='Apply data augmentation')
+        # img_res should be a tuple, parse it accordingly or keep as default and handle in __init__
+        parser.add_argument('--img_res', type=int, nargs=2, default=[500, 500], help='Image resolution (width, height)')
+        parser.add_argument('--max_rot', type=float, default=20, help='Maximum rotation for augmentation')
+        parser.add_argument('--max_transl', type=float, default=0.1, help='Maximum translation for augmentation')
+        parser.add_argument('--noise', type=float, default=0.01, help='Noise level for augmentation')
+        parser.add_argument('--jitter', type=float, default=0.02, help='Jitter level for augmentation')
+        return parser
+
+# Create a separate Dataset class for handling individual samples
+class RealDataset(Dataset):
+    def __init__(
+        self,
+        data_path,
+        frame_ids,
+        tracking_results_dict, # Pass the loaded dictionary
         load_lmk=True,
         load_seg=True,
         load_camera=True,
@@ -103,8 +263,8 @@ class RealDataModule(Dataset):
         jitter=0.02,
     ):
         self.data_path = data_path
-        self.split_config = split_config
-        self.tracking_results_path = tracking_results_path
+        self.frame_ids = frame_ids
+        self.tracking_results_dict = tracking_results_dict # Store the dictionary
         self.load_lmk = load_lmk
         self.load_seg = load_seg
         self.load_camera = load_camera
@@ -117,35 +277,6 @@ class RealDataModule(Dataset):
         self.max_transl = max_transl
         self.noise = noise
         self.jitter = jitter
-
-        # Load frame IDs based on split config
-        with open(self.split_config, "r") as f:
-            split = json.load(f)
-
-        # Determine if it's a training or validation dataset based on split_config
-        # Assuming the dataset is instantiated for either train or validation
-        # Filter out frame IDs that don't have a corresponding directory
-        all_frame_dirs = glob.glob(f"{data_path}/frame_*")
-        if any(frame_dir.endswith(f"frame_{i}") for i in split["train"] for frame_dir in all_frame_dirs):
-             self.frame_ids = [i for i in split["train"] if os.path.exists(os.path.join(data_path, f"frame_{i}"))]
-             print(f"[92m[07/06 02:41:29 nha.data.real]: [0mCollected real training dataset containing: {len(self.frame_ids)} samples.")
-        elif any(frame_dir.endswith(f"frame_{i}") for i in split["val"] for frame_dir in all_frame_dirs):
-             self.frame_ids = [i for i in split["val"] if os.path.exists(os.path.join(data_path, f"frame_{i}"))]
-             print(f"[92m[07/06 02:41:29 nha.data.real]: [0mCollected real validation dataset containing: {len(self.frame_ids)} samples.")
-        else:
-            # Fallback: load all samples if split doesn't match
-            self.frame_ids = sorted([int(d.split('_')[-1]) for d in all_frame_dirs])
-            print(f"[93m[WARNING]: Split config does not match, loading all samples: {len(self.frame_ids)} samples.[0m")
-
-
-        # Load tracking results
-        if self.load_flame:
-            self.tracking_results = np.load(self.tracking_results_path, allow_pickle=True)
-            # Convert tracking results to a dictionary for easier lookup by frame_id
-            self.tracking_results_dict = {int(k): v for k, v in self.tracking_results.item().items()}
-        else:
-            self.tracking_results_dict = {}
-
 
     def __len__(self):
         return len(self.frame_ids)
@@ -242,23 +373,3 @@ class RealDataModule(Dataset):
         if any(value is None for value in data.values()):
             return None
         return data
-
-    @staticmethod # Add staticmethod decorator
-    def add_argparse_args(parent_parser):
-        parser = argparse.ArgumentParser(parents=[parent_parser], add_help=False)
-        parser.add_argument('--data_path', type=str, required=True, help='Path to the dataset')
-        parser.add_argument('--split_config', type=str, required=True, help='Path to the split config JSON file')
-        parser.add_argument('--tracking_results_path', type=str, required=True, help='Path to the tracking results NPZ file')
-        parser.add_argument('--load_lmk', type=bool, default=True, help='Load landmarks')
-        parser.add_argument('--load_seg', type=bool, default=True, help='Load segmentation')
-        parser.add_argument('--load_camera', type=bool, default=True, help='Load camera parameters')
-        parser.add_argument('--load_flame', type=bool, default=True, help='Load FLAME parameters')
-        parser.add_argument('--load_normal', type=bool, default=True, help='Load normal maps')
-        parser.add_argument('--load_parsing', type=bool, default=True, help='Load parsing maps')
-        parser.add_argument('--augment', type=bool, default=True, help='Apply data augmentation')
-        parser.add_argument('--img_res', type=tuple, default=(500, 500), help='Image resolution')
-        parser.add_argument('--max_rot', type=float, default=20, help='Maximum rotation for augmentation')
-        parser.add_argument('--max_transl', type=float, default=0.1, help='Maximum translation for augmentation')
-        parser.add_argument('--noise', type=float, default=0.01, help='Noise level for augmentation')
-        parser.add_argument('--jitter', type=float, default=0.02, help='Jitter level for augmentation')
-        return parser
