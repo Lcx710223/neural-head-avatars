@@ -7,7 +7,7 @@
 # code below.
 
 """
-Copyright (c) 2023 Lcx710223 V20250710
+Copyright (c) 2023 Lcx710223 20250710修改。
 This software is licensed under the MIT License.
 """
 
