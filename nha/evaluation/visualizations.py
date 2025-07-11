@@ -247,7 +247,7 @@ def generate_novel_view_folder(model, data_module, angles=[[0, 0], [-30, 0], [-6
     # Get the appropriate dataset based on the split
     # Note: Assuming RealDataModule now stores _train_set and _val_set
     if split == "train":
-        dataset = data_module._train_set
+        dataset = data_module.train_dataloader().dataset  ###LCX20250711
     elif split == "val":
         dataset = data_module._val_set
     else:
