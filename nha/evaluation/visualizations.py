@@ -2,7 +2,7 @@
 ### 错误关键行来自 visualizations.py 的 generate_novel_view_folder：Image.open(img).save(f_outpath)  FileNotFoundError: [Errno 2] No such file or directory: 'rgba_pred'
 ### 这说明 img 被赋值了字符串 'rgba_pred'，而不是 tensor 或文件路径。
 ### LCX20250623 58-64行。原文是从YAML调取5个参数，但是与保存的CKPTS里的数据不能对应。现在修改为直接从CKPTS里直接读取5个超参数。
-### LCX20250710 修改。
+### LCX20250710 -13修改349行TAB位。
 
 import torch
 import os
@@ -345,15 +345,15 @@ def generate_novel_view_folder(model, data_module, angles=[[0, 0], [-30, 0], [-6
                         # You might need to create a default camera_R or skip if camera is essential
 
 
-                 # Get the predicted RGB image for this angle
-                 try:
+                # Get the predicted RGB image for this angle
+                try:
                      model_output = model(modified_batch)
                      if 'pred_rgb' in model_output:
                          # Assuming model_output['pred_rgb'] is B x C x H x W, squeeze batch dim
                          frame_novel_views.append(model_output['pred_rgb'].detach().cpu().squeeze(0))
                      else:
                          print(f"[93m[WARNING]: Model output does not contain 'pred_rgb' for frame {frame_id} at angle {angle}.[0m")
-                 except Exception as e:
+                except Exception as e:
                      print(f"[91m[ERROR]: Error during model prediction for frame {frame_id} at angle {angle}: {e}[0m")
                      # Optionally, append a placeholder or handle skipped
 
