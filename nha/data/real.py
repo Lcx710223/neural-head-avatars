@@ -8,7 +8,7 @@
 
 """
 Copyright (c) 2023 Lcx710223 20250710修改。
-LCX20250715修改149-150行：{i}修改为：{i:04d},补齐前导零。
+LCX20250715修改149-150行：{i}修改为：{i:04d},补齐前导零，使正确加载数据集。
 This software is licensed under the MIT License.
 """
 
