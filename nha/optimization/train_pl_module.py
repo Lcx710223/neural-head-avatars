@@ -128,7 +128,7 @@ def train_pl_module(optimizer_module, data_module, args=None):
                 logger=experiment_logger
             )
 
-            trainer.fit( model, datamodule=data,ckpt_path=None ) ###LCX20250715修改，删掉第3个参数。 Modified for PL 1.2.4 compatibility?
+            trainer.fit( model, datamodule=data ) ###LCX20250715修改，删掉第3个参数。
             
             # 每次都保存到同一个ckpt
             trainer.save_checkpoint(ckpt_path)
