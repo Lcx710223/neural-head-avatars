@@ -75,8 +75,8 @@ def load_split(data_path, split_config_path):
     with open(split_config_path, "r") as f:
         split = json.load(f)
 
-    train_dirs = [os.path.join(data_path, f"frame_{i}") for i in split["train"]]
-    val_dirs = [os.path.join(data_path, f"frame_{i}") for i in split["val"]]
+    train_dirs = [os.path.join(data_path, f"frame_{i:04d}") for i in split["train"]]
+    val_dirs = [os.path.join(data_path, f"frame_{i:04d}") for i in split["val"]]
 
     return train_dirs, val_dirs
 
@@ -284,12 +284,12 @@ class RealDataset(Dataset):
 
     def __getitem__(self, idx):
         frame_id = self.frame_ids[idx]
-        frame_dir = os.path.join(self.data_path, f"frame_{frame_id}")
+        frame_dir = os.path.join(self.data_path, f"frame_{frame_id:04d}")
 
         data = {"frame_id": frame_id} # Add frame_id to the data dictionary
 
         # Load image
-        img_path = os.path.join(frame_dir, "image.jpg")
+        img_path = os.path.join(frame_dir, "image_0000.png") ###LCX20250715修改image为：image_0000。
         if os.path.exists(img_path):
             img = cv2.imread(img_path)
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
