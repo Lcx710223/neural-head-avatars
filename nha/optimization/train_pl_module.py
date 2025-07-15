@@ -3,7 +3,7 @@
 ### LCX20250622修改了反序列化的代码，主要是加载CKPTS时的信任与安全问题。LCX20250623IMPORT JSON。
 ### LCX20250623修改了：import json ###LCX20250630修改107行，切换训练场景。
 ### LCX 20250710修改了第60行，删掉了不应传递的参数：'data_worker', 'train_batch_size', 'validation_batch_size'
-### LCX20250710修改了125行，180行，181行等。LCX20250711修改169行。
+### LCX20250710修改了125行，180行，181行等。LCX20250711修改169行。LCX20250715修改131行。
 
 import time
 from collections import OrderedDict
@@ -128,13 +128,8 @@ def train_pl_module(optimizer_module, data_module, args=None):
                 logger=experiment_logger
             )
 
-            trainer.fit(
-                model,
-                train_dataloaders=data.train_dataloader( ),
-                val_dataloaders=data.val_dataloader( ),
-                ckpt_path=None, # 明确指定不从检查点恢复LCX20250710 
-            )
-
+            trainer.fit(model, datamodule=data) ###LCX20250715修改，删掉第3个参数。 Modified for PL 1.2.4 compatibility
+            
             # 每次都保存到同一个ckpt
             trainer.save_checkpoint(ckpt_path)
 
