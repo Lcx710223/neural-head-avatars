@@ -8,6 +8,7 @@
 
 """
 Copyright (c) 2023 Lcx710223 20250710修改。
+LCX20250715修改149-150行：{i}修改为：{i:04d},补齐前导零。
 This software is licensed under the MIT License.
 """
 
@@ -146,8 +147,8 @@ class RealDataModule(LightningDataModule): # Inherit from LightningDataModule
         if self.all_frame_ids:
             self.max_frame_id = max(self.all_frame_ids) # Calculate max frame ID
 
-        self.train_frame_ids = [i for i in split["train"] if os.path.exists(os.path.join(self.data_path, f"frame_{i}"))]
-        self.val_frame_ids = [i for i in split["val"] if os.path.exists(os.path.join(self.data_path, f"frame_{i}"))]
+        self.train_frame_ids = [i for i in split["train"] if os.path.exists(os.path.join(self.data_path, f"frame_{i:04d}"))]
+        self.val_frame_ids = [i for i in split["val"] if os.path.exists(os.path.join(self.data_path, f"frame_{i:04d}"))]
 
         print(f"[92m[07/06 02:41:29 nha.data.real]: [0mCollected real training dataset containing: {len(self.train_frame_ids)} samples.")
         print(f"[92m[07/06 02:41:29 nha.data.real]: [0mCollected real validation dataset containing: {len(self.val_frame_ids)} samples.")
