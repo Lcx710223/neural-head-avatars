@@ -1,3 +1,5 @@
+###JULES-20250726-2:30 修改1791行，删掉第2个参数：optimizer_idx。
+
 from nha.models.texture import MultiTexture
 from nha.models.flame import *
 from nha.models.offset_mlp import OffsetMLP
@@ -1788,7 +1790,12 @@ class NHAOptimizer(pl.LightningModule):
 
         return loss
 
-    def training_step(self, batch, batch_idx, optimizer_idx, *args, **kwargs):
+    ### 在nha/models/nha_optimizer.py文件的__init__方法中，self.automatic_optimization被设置为False。这意味着代码使用的是PyTorch Lightning的手动优化模式。
+    ### 在手动优化模式下，开发者需要自己在 training_step 方法中显式地处理优化器（例如，调用 optimizer.step() 和 optimizer.zero_grad()）。PyTorch Lightning
+    ### 不会自动管理优化器，因此 training_step 方法的签名中不应该包含 optimizer_idx 参数。optimizer_idx 参数仅在自动优化模式下使用，当模型有多个优化器时，
+    ### PyTorchLightning会用它来告诉training_step当前正在使用的是哪个优化器。由于这里是手动模式，框架不会传入这个参数，但函数签名中却要求这个参数。所以出错。
+    ### 通过从 training_step 的函数定义中移除 optimizer_idx，我们使其签名与 PyTorch Lightning 在手动优化模式下的期望相匹配，从而解决了这个错误。
+    def training_step(self, batch, batch_idx, *args, **kwargs):
         self.is_train = True
         self.fit_residuals = False
         self.prepare_batch(batch)
