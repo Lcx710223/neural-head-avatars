@@ -1,3 +1,5 @@
+###JULES-20250726,修改第88行：原来的train_dataloader 修改为：train_dataloaders。
+
 import json
 import time
 from collections import OrderedDict
@@ -85,8 +87,9 @@ def train_pl_module(optimizer_module, data_module, args=None):
                                                     logger=experiment_logger)
 
             # training
+            # JULES-20250726-2:12修复：将 'train_dataloader' 修改为 'train_dataloaders'，以匹配新版（1.9.5）PyTorch Lightning 的 API。
             trainer.fit(model,
-                        train_dataloader=data.train_dataloader(batch_size=data._train_batch[i]),
+                        train_dataloaders=data.train_dataloader(batch_size=data._train_batch[i]),
                         val_dataloaders=data.val_dataloader(batch_size=data._val_batch[i]))
 
             ckpt_path = Path(trainer.log_dir) / "checkpoints" / (stage + "_optim.ckpt")
