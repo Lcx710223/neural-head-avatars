@@ -1,5 +1,5 @@
 ###JULES-20250726-2:30 修改1791行，删掉第2个参数：optimizer_idx。
-###JULES-20250727-4：00 修改62行，298行，1793行。移除了已弃用的add_argparse_args静态方法，更新了training_step 法的签名，并修正了on_train_end方法中对train_dataloader的调用。
+###JULES-20250727-4:00 修改62行，298行，1793行。移除了已弃用的add_argparse_args静态方法，更新了training_step 法的签名，并修正了on_train_end方法中对train_dataloader的调用。
 
 from nha.models.texture import MultiTexture
 from nha.models.flame import *
@@ -60,6 +60,9 @@ class NHAOptimizer(pl.LightningModule):
     Main Class for Optimizing Neural Head Avatars from RGB sequences.
     """
 
+    # JULES-20250726-2:30 中文注释：
+    # `add_argparse_args` 静态方法在 pytorch-lightning 1.9.5 版本中已被弃用。
+    # 我们将其移除，并已在 `train_pl_module.py` 中手动添加了相关参数。
     def __init__(self, max_frame_id, w_lap, w_silh, w_semantic_hair, body_part_weights, **kwargs):
         super().__init__()
         self.save_hyperparameters()
@@ -229,6 +232,8 @@ class NHAOptimizer(pl.LightningModule):
 
     def on_train_end(self) -> None:
         # determining dynamic condition extrema for validation
+        # JULES-20250726-2:30 中文注释：
+        # 在 pytorch-lightning 1.9.5 版本中，应通过 `self.trainer.datamodule` 访问 dataloader。
         self.get_dyn_cond_extrema(self.trainer.datamodule.train_dataloader().dataset.datasets)
 
     def _get_current_optimizer(self, epoch=None):
@@ -1724,6 +1729,9 @@ class NHAOptimizer(pl.LightningModule):
 
         return loss
 
+    # JULES-20250726-2:30 中文注释：
+    # 在 pytorch-lightning 1.9.5 的手动优化模式下，`training_step` 方法的签名不应包含 `optimizer_idx` 参数。
+    # 我们移除了这个参数以匹配新版本的 API。
     def training_step(self, batch, batch_idx):
         self.is_train = True
         self.fit_residuals = False
