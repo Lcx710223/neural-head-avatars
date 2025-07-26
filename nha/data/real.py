@@ -1,3 +1,5 @@
+###JULES20250727，修改487行。移除了add_argpars_args类方法。
+
 from nha.util.log import get_logger
 from nha.util.general import get_mask_bbox
 from nha.util.render import create_intrinsics_matrix
@@ -484,33 +486,6 @@ class RealDataModule(pl.LightningDataModule):
 
         return train_split, val_split
 
-    @classmethod
-    def add_argparse_args(cls, parser):
-        """
-        Adds dataset specific parameters to parser
-        :param parser:
-        :return:
-        """
-        parser = argparse.ArgumentParser(parents=[parser], add_help=False)
-        parser.add_argument("--data_path", type=str, required=True)
-        parser.add_argument("--data_worker", type=int, default=8)
-        parser.add_argument("--split_config", type=str, required=False, default=None)
-        parser.add_argument("--train_batch_size", type=int, default=8, nargs=3)
-        parser.add_argument("--validation_batch_size", type=int, default=8, nargs=3)
-        parser.add_argument("--tracking_results_path", type=Path, default=None)
-        parser.add_argument("--tracking_resolution", type=int, default=None, nargs=2)
-        parser.add_argument("--load_uv", action="store_true")
-        parser.add_argument("--load_normal", action="store_true")
-        parser.add_argument("--load_flame", action="store_true")
-        parser.add_argument("--load_bbx", action="store_true")
-        parser.add_argument("--load_lmk", action="store_true")
-        parser.add_argument("--lmk_dynamic", action="store_true")
-        parser.add_argument("--load_seg", action="store_true")
-        parser.add_argument("--load_camera", action="store_true")
-        parser.add_argument("--load_light", action="store_true")
-        parser.add_argument("--load_parsing", action="store_true")
-
-        return parser
 
     def train_dataloader(self, batch_size):
         return DataLoader(
