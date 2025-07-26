@@ -1,5 +1,5 @@
 ###JULES-20250726,修改第88行：原来的train_dataloader 修改为：train_dataloaders。
-###JULES-20250727。修改38，85，93行。移除了对已弃用的add_argparse_args的调用，并相应地手动添加了参数；同时，更新了trainer.fit方法的参数，以适应新版本的 API。
+###JULES-20250727。修改38，85（新165行），93行（新175）。移除了对已弃用的add_argparse_args的调用，并相应地手动添加了参数；同时，更新了trainer.fit方法的参数，以适应新版本的 API。
 
 import json
 import time
