@@ -1,7 +1,7 @@
 """
 Code heavily inspired by https://github.com/JustusThies/NeuralTexGen/blob/master/models/VGG_LOSS.py
 """
-###JULES202507277:45修改61行，把RES18模型放置到CPU（如果GPU无效）里。
+###JULES20250727 7:45修改61行，原把RES18模型直接放到CPU里，修改为先检测GPU/CPU再加载到设备里。
 
 import torch
 from torchvision import models
