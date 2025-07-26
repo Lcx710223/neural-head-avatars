@@ -16,7 +16,7 @@ setup(
         "tensorboard",
         "scipy",
         "opencv-python",
-        ### 原设定 "chumpy",修改为下面的!pip install git+https://github.com/mattloper/chumpy.git
+        "chumpy",
         "face-alignment",
         "face-detection-tflite",
         ### 原设定 "pytorch-lightning==1.2.4",改版本如下
