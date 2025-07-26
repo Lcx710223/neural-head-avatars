@@ -1,4 +1,5 @@
 ###JULES-20250726-2:30 修改1791行，删掉第2个参数：optimizer_idx。
+###JULES-20250727-4：00 修改62行，298行，1793行。移除了已弃用的add_argparse_args静态方法，更新了training_step 法的签名，并修正了on_train_end方法中对train_dataloader的调用。
 
 from nha.models.texture import MultiTexture
 from nha.models.flame import *
@@ -58,73 +59,6 @@ class NHAOptimizer(pl.LightningModule):
     """
     Main Class for Optimizing Neural Head Avatars from RGB sequences.
     """
-
-    @staticmethod
-    def add_argparse_args(parser):
-        parser = ArgumentParser(parents=[parser], add_help=False)
-
-        # specific arguments for combined module
-
-        combi_args = [
-            # texture settings
-            dict(name_or_flags="--texture_hidden_feats", default=256, type=int),
-            dict(name_or_flags="--texture_hidden_layers", default=8, type=int),
-            dict(name_or_flags="--texture_d_hidden_dynamic", type=int, default=128),
-            dict(name_or_flags="--texture_n_hidden_dynamic", type=int, default=1),
-            dict(name_or_flags="--glob_rot_noise", type=float, default=5.0),
-            dict(name_or_flags="--d_normal_encoding", type=int, default=32),
-            dict(name_or_flags="--d_normal_encoding_hidden", type=int, default=128),
-            dict(name_or_flags="--n_normal_encoding_hidden", type=int, default=2),
-            dict(name_or_flags="--flame_noise", type=float, default=0.0),
-            dict(name_or_flags="--soft_clip_sigma", type=float, default=-1.0),
-
-            # geometry refinement mlp settings
-            dict(name_or_flags="--offset_hidden_layers", default=8, type=int),
-            dict(name_or_flags="--offset_hidden_feats", default=256, type=int),
-
-            # FLAME settings
-            dict(name_or_flags="--subdivide_mesh", type=int, default=1),
-            dict(name_or_flags="--semantics_blur", default=3, type=int, required=False),
-            dict(name_or_flags="--spatial_blur_sigma", type=float, default=0.01),
-
-            # training timeline settings
-            dict(name_or_flags="--epochs_offset", type=int, default=50,
-                 help="Until which epoch to train flame parameters and offsets jointly"),
-            dict(name_or_flags="--epochs_texture", type=int, default=500,
-                 help="Until which epoch to train texture while keeping model fixed"),
-            dict(name_or_flags="--epochs_joint", type=int, default=500,
-                 help="Until which epoch to train model jointly while keeping model fixed"),
-            dict(name_or_flags="--image_log_period", type=int, default=10),
-
-            # lr settings
-            dict(name_or_flags="--flame_lr", default=0.005, type=float, nargs=3),
-            dict(name_or_flags="--offset_lr", default=0.005, type=float, nargs=3),
-            dict(name_or_flags="--tex_lr", default=0.01, type=float, nargs=3),
-
-            # loss weights
-            dict(name_or_flags="--body_part_weights", type=str, required=True),
-            dict(name_or_flags="--w_rgb", type=float, default=1, nargs=3),
-            dict(name_or_flags="--w_perc", default=0, type=float, nargs=3),
-            dict(name_or_flags="--w_lmk", default=1, type=float, nargs=3),
-            dict(name_or_flags="--w_eye_closed", default=1, type=float, nargs=3),
-            dict(name_or_flags="--w_edge", default=1, type=float, nargs=3),
-            dict(name_or_flags="--w_norm", default=1, type=float, nargs=3),
-            dict(name_or_flags="--w_lap", type=json.loads, nargs="*"),
-            dict(name_or_flags="--w_shape_reg", default=1e-4, type=float, nargs=3),
-            dict(name_or_flags="--w_expr_reg", default=1e-4, type=float, nargs=3),
-            dict(name_or_flags="--w_pose_reg", default=1e-4, type=float, nargs=3),
-            dict(name_or_flags="--w_surface_reg", default=1e-4, type=float, nargs=3),
-            dict(name_or_flags="--texture_weight_decay", type=float, default=5e-6, nargs=3),
-            dict(name_or_flags="--w_silh", type=json.loads, nargs="*"),
-            dict(name_or_flags="--w_semantic_ear", default=[1e-2] * 3, type=float, nargs=3),
-            dict(name_or_flags="--w_semantic_eye", default=[1e-1] * 3, type=float, nargs=3),
-            dict(name_or_flags="--w_semantic_mouth", default=[1e-1] * 3, type=float, nargs=3),
-            dict(name_or_flags="--w_semantic_hair", type=json.loads, nargs="*"),
-        ]
-        for f in combi_args:
-            parser.add_argument(f.pop("name_or_flags"), **f)
-
-        return parser
 
     def __init__(self, max_frame_id, w_lap, w_silh, w_semantic_hair, body_part_weights, **kwargs):
         super().__init__()
@@ -295,7 +229,7 @@ class NHAOptimizer(pl.LightningModule):
 
     def on_train_end(self) -> None:
         # determining dynamic condition extrema for validation
-        self.get_dyn_cond_extrema(self.trainer.train_dataloader.dataset.datasets)
+        self.get_dyn_cond_extrema(self.trainer.datamodule.train_dataloader().dataset.datasets)
 
     def _get_current_optimizer(self, epoch=None):
         if epoch is None:
@@ -1790,12 +1724,7 @@ class NHAOptimizer(pl.LightningModule):
 
         return loss
 
-    ### 在nha/models/nha_optimizer.py文件的__init__方法中，self.automatic_optimization被设置为False。这意味着代码使用的是PyTorch Lightning的手动优化模式。
-    ### 在手动优化模式下，开发者需要自己在 training_step 方法中显式地处理优化器（例如，调用 optimizer.step() 和 optimizer.zero_grad()）。PyTorch Lightning
-    ### 不会自动管理优化器，因此 training_step 方法的签名中不应该包含 optimizer_idx 参数。optimizer_idx 参数仅在自动优化模式下使用，当模型有多个优化器时，
-    ### PyTorchLightning会用它来告诉training_step当前正在使用的是哪个优化器。由于这里是手动模式，框架不会传入这个参数，但函数签名中却要求这个参数。所以出错。
-    ### 通过从 training_step 的函数定义中移除 optimizer_idx，我们使其签名与 PyTorch Lightning 在手动优化模式下的期望相匹配，从而解决了这个错误。
-    def training_step(self, batch, batch_idx, *args, **kwargs):
+    def training_step(self, batch, batch_idx):
         self.is_train = True
         self.fit_residuals = False
         self.prepare_batch(batch)
