@@ -486,6 +486,9 @@ class RealDataModule(pl.LightningDataModule):
 
         return train_split, val_split
 
+    # JULES-20250726-2:30 中文注释：
+    # `add_argparse_args` 类方法在 pytorch-lightning 1.9.5 版本中已被弃用。
+    # 我们将其移除，并已在 `train_pl_module.py` 中手动添加了相关参数。
 
     def train_dataloader(self, batch_size):
         return DataLoader(
