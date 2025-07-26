@@ -1,4 +1,5 @@
 ###JULES-20250726,修改第88行：原来的train_dataloader 修改为：train_dataloaders。
+###JULES-20250727。修改38，85，93行。移除了对已弃用的add_argparse_args的调用，并相应地手动添加了参数；同时，更新了trainer.fit方法的参数，以适应新版本的 API。
 
 import json
 import time
@@ -34,8 +35,86 @@ def train_pl_module(optimizer_module, data_module, args=None):
     """
     # creating argument parser
     parser = ArgumentParser()
-    parser = optimizer_module.add_argparse_args(parser)
-    parser = data_module.add_argparse_args(parser)
+    
+    # Manually adding arguments from NHAOptimizer
+    combi_args = [
+        # texture settings
+        dict(name_or_flags="--texture_hidden_feats", default=256, type=int),
+        dict(name_or_flags="--texture_hidden_layers", default=8, type=int),
+        dict(name_or_flags="--texture_d_hidden_dynamic", type=int, default=128),
+        dict(name_or_flags="--texture_n_hidden_dynamic", type=int, default=1),
+        dict(name_or_flags="--glob_rot_noise", type=float, default=5.0),
+        dict(name_or_flags="--d_normal_encoding", type=int, default=32),
+        dict(name_or_flags="--d_normal_encoding_hidden", type=int, default=128),
+        dict(name_or_flags="--n_normal_encoding_hidden", type=int, default=2),
+        dict(name_or_flags="--flame_noise", type=float, default=0.0),
+        dict(name_or_flags="--soft_clip_sigma", type=float, default=-1.0),
+
+        # geometry refinement mlp settings
+        dict(name_or_flags="--offset_hidden_layers", default=8, type=int),
+        dict(name_or_flags="--offset_hidden_feats", default=256, type=int),
+
+        # FLAME settings
+        dict(name_or_flags="--subdivide_mesh", type=int, default=1),
+        dict(name_or_flags="--semantics_blur", default=3, type=int, required=False),
+        dict(name_or_flags="--spatial_blur_sigma", type=float, default=0.01),
+
+        # training timeline settings
+        dict(name_or_flags="--epochs_offset", type=int, default=50,
+             help="Until which epoch to train flame parameters and offsets jointly"),
+        dict(name_or_flags="--epochs_texture", type=int, default=500,
+             help="Until which epoch to train texture while keeping model fixed"),
+        dict(name_or_flags="--epochs_joint", type=int, default=500,
+             help="Until which epoch to train model jointly while keeping model fixed"),
+        dict(name_or_flags="--image_log_period", type=int, default=10),
+
+        # lr settings
+        dict(name_or_flags="--flame_lr", default=0.005, type=float, nargs=3),
+        dict(name_or_flags="--offset_lr", default=0.005, type=float, nargs=3),
+        dict(name_or_flags="--tex_lr", default=0.01, type=float, nargs=3),
+
+        # loss weights
+        dict(name_or_flags="--body_part_weights", type=str, required=True),
+        dict(name_or_flags="--w_rgb", type=float, default=1, nargs=3),
+        dict(name_or_flags="--w_perc", default=0, type=float, nargs=3),
+        dict(name_or_flags="--w_lmk", default=1, type=float, nargs=3),
+        dict(name_or_flags="--w_eye_closed", default=1, type=float, nargs=3),
+        dict(name_or_flags="--w_edge", default=1, type=float, nargs=3),
+        dict(name_or_flags="--w_norm", default=1, type=float, nargs=3),
+        dict(name_or_flags="--w_lap", type=json.loads, nargs="*"),
+        dict(name_or_flags="--w_shape_reg", default=1e-4, type=float, nargs=3),
+        dict(name_or_flags="--w_expr_reg", default=1e-4, type=float, nargs=3),
+        dict(name_or_flags="--w_pose_reg", default=1e-4, type=float, nargs=3),
+        dict(name_or_flags="--w_surface_reg", default=1e-4, type=float, nargs=3),
+        dict(name_or_flags="--texture_weight_decay", type=float, default=5e-6, nargs=3),
+        dict(name_or_flags="--w_silh", type=json.loads, nargs="*"),
+        dict(name_or_flags="--w_semantic_ear", default=[1e-2] * 3, type=float, nargs=3),
+        dict(name_or_flags="--w_semantic_eye", default=[1e-1] * 3, type=float, nargs=3),
+        dict(name_or_flags="--w_semantic_mouth", default=[1e-1] * 3, type=float, nargs=3),
+        dict(name_or_flags="--w_semantic_hair", type=json.loads, nargs="*"),
+    ]
+    for f in combi_args:
+        parser.add_argument(f.pop("name_or_flags"), **f)
+
+    # Manually adding arguments from RealDataModule
+    parser.add_argument("--data_path", type=str, required=True)
+    parser.add_argument("--data_worker", type=int, default=8)
+    parser.add_argument("--split_config", type=str, required=False, default=None)
+    parser.add_argument("--train_batch_size", type=int, default=8, nargs=3)
+    parser.add_argument("--validation_batch_size", type=int, default=8, nargs=3)
+    parser.add_argument("--tracking_results_path", type=Path, default=None)
+    parser.add_argument("--tracking_resolution", type=int, default=None, nargs=2)
+    parser.add_argument("--load_uv", action="store_true")
+    parser.add_argument("--load_normal", action="store_true")
+    parser.add_argument("--load_flame", action="store_true")
+    parser.add_argument("--load_bbx", action="store_true")
+    parser.add_argument("--load_lmk", action="store_true")
+    parser.add_argument("--lmk_dynamic", action="store_true")
+    parser.add_argument("--load_seg", action="store_true")
+    parser.add_argument("--load_camera", action="store_true")
+    parser.add_argument("--load_light", action="store_true")
+    parser.add_argument("--load_parsing", action="store_true")
+    
     parser = pl.Trainer.add_argparse_args(parser)
 
     parser = ConfigArgumentParser(parents=[parser], add_help=False)
@@ -82,15 +161,14 @@ def train_pl_module(optimizer_module, data_module, args=None):
 
             ckpt_file = args_dict["checkpoint_file"] if args_dict["checkpoint_file"] else None
             trainer = pl.Trainer.from_argparse_args(args, callbacks=model.callbacks,
-                                                    resume_from_checkpoint=ckpt_file,
                                                     max_epochs=stage_jumps[i],
                                                     logger=experiment_logger)
 
             # training
-            # JULES-20250726-2:12修复：将 'train_dataloader' 修改为 'train_dataloaders'，以匹配新版（1.9.5）PyTorch Lightning 的 API。
             trainer.fit(model,
                         train_dataloaders=data.train_dataloader(batch_size=data._train_batch[i]),
-                        val_dataloaders=data.val_dataloader(batch_size=data._val_batch[i]))
+                        val_dataloaders=data.val_dataloader(batch_size=data._val_batch[i]),
+                        ckpt_path=ckpt_file)
 
             ckpt_path = Path(trainer.log_dir) / "checkpoints" / (stage + "_optim.ckpt")
             trainer.save_checkpoint(ckpt_path)
