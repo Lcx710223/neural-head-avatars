@@ -1,6 +1,8 @@
 """
 Code heavily inspired by https://github.com/JustusThies/NeuralTexGen/blob/master/models/VGG_LOSS.py
 """
+###JULES202507277:45修改61行，把RES18模型放置到CPU（如果GPU无效）里。
+
 import torch
 from torchvision import models
 from torchvision.transforms import Normalize
@@ -58,7 +60,9 @@ class ResNet18(torch.nn.Module):
     def __init__(self, weight_path):
         super(ResNet18, self).__init__()
         net = get_model("r18")
-        net.load_state_dict(torch.load(weight_path))
+        # 检查是否有可用的GPU，并相应地设置设备
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        net.load_state_dict(torch.load(weight_path, map_location=device))
         net.eval()
         self.conv1 = net.conv1
         self.bn1 = net.bn1
