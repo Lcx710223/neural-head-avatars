@@ -1,5 +1,5 @@
 ###JULES-20250726-2:30 修改1791行，删掉第2个参数：optimizer_idx。
-###JULES-20250727-4:00 修改62行，298行，1793行。移除了已弃用的add_argparse_args静态方法，更新了training_step 法的签名，并修正了on_train_end方法中对train_dataloader的调用。
+###JULES-20250727-4:00 修改62行，233行，1793行。移除了已弃用的add_argparse_args静态方法，更新了training_step 法的签名，并修正了on_train_end方法中对train_dataloader的调用。
 
 from nha.models.texture import MultiTexture
 from nha.models.flame import *
