@@ -36,7 +36,7 @@ def train_pl_module(optimizer_module, data_module, args=None):
     # creating argument parser
     parser = ArgumentParser()
     
-    # JULES-20250726-2:30 中文注释：
+    # JULES-20250727中文注释：
     # 以下代码手动添加了 NHAOptimizer 和 RealDataModule 的参数。
     # 这是因为在 pytorch-lightning 1.9.5 版本中，`add_argparse_args` 方法已被弃用。
     # 我们通过直接定义这些参数来替代旧的调用方式。
@@ -167,7 +167,7 @@ def train_pl_module(optimizer_module, data_module, args=None):
                                                     max_epochs=stage_jumps[i],
                                                     logger=experiment_logger)
 
-            # JULES-20250726-2:30 中文注释：
+            # JULES-20250727中文注释：
             # 在 pytorch-lightning 1.9.5 版本中，`resume_from_checkpoint` 参数已从 `Trainer` 的构造函数中移除，
             # 并移至 `fit` 方法的 `ckpt_path` 参数。同时，`train_dataloader` 和 `val_dataloader`
             # 已分别重命名为 `train_dataloaders` 和 `val_dataloaders`。
