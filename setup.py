@@ -20,7 +20,7 @@ setup(
         "git+https://github.com/mattloper/chumpy.git",
         "face-alignment",
         "face-detection-tflite",
-        ### 原设定 "pytorch-lightning==1.2.4",改版本如下
+        ### 原设定 "pytorch-lightning==1.2.4",现在改版本如下
         pytorch-lightning==1.9.5
         "lpips",
         "pytorch_msssim",
