@@ -1,5 +1,6 @@
 ###JULES-20250726-2:30 修改1791行，删掉第2个参数：optimizer_idx。
 ###JULES-20250727-4:00 修改62行，233行，1731行。移除了已弃用的add_argparse_args静态方法，更新了training_step 法的签名，并修正了on_train_end方法中对train_dataloader的调用。
+###JULES-20250728-4:00 修改711行，把张量和指针放置在同一设备上。原代码是分置了模型和指针。
 
 from nha.models.texture import MultiTexture
 from nha.models.flame import *
@@ -707,8 +708,12 @@ class NHAOptimizer(pl.LightningModule):
         pixel_expl_features_masked = self._explFeatures(pixel_uv_coords_masked.view(1, 1, -1, 2),
                                                         pixel_uv_ids_masked.view(1, 1, -1))
         pixel_expl_features_masked = pixel_expl_features_masked[0, :, 0, :].permute(1, 0)
+        
+        # JULES-20250728-4：00注释：修复运行时错误：`indices should be either on cpu or on the same device as the indexed tensor (cpu)`
+        # 错误原因是`mask`在GPU上，而`torch.arange(N)` 默认在CPU上创建张量。通过添加`device=mask.device`我们确保两个张量在同一个设备上，从而解决索引操作时的设备不匹配问题。
+        
         static_mlp_conditions_masked = torch.cat((pixel_face_coords_masked, pixel_expl_features_masked), dim=-1)
-        n_masked = torch.arange(N).view(N, 1, 1, 1).expand(N, H, W, faces_per_pix)[mask]
+        n_masked = torch.arange(N, device=mask.device).view(N, 1, 1, 1).expand(N, H, W, faces_per_pix)[mask]
         region_weights_masked = region_weights[mask]  # N' x 3
         frequencies_masked = torch.sum(frequencies[n_masked] * region_weights_masked.unsqueeze(-1), dim=1)
         phase_shifts_masked = torch.sum(phase_shifts[n_masked] * region_weights_masked.unsqueeze(-1), dim=1)
