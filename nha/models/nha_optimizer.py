@@ -1,6 +1,8 @@
 ###JULES-20250726-2:30 修改1791行，删掉第2个参数：optimizer_idx。
 ###JULES-20250727-4:00 修改62行，233行，1731行。移除了已弃用的add_argparse_args静态方法，更新了training_step 法的签名，并修正了on_train_end方法中对train_dataloader的调用。
 ###JULES-20250728-4:00 修改711行，把张量和指针放置在同一设备上。原代码是分置了模型和指针。
+###JULES-20250730,238行，修改了on_train_end方法，用self.dm代替self.trainer.datamodule.
+###JULES-20250730,187行，修改on_train_start方法。缓存datamodule因为在on_train_end中self.trainer.datamodule可能会被置为 None。
 
 from nha.models.texture import MultiTexture
 from nha.models.flame import *
@@ -184,6 +186,9 @@ class NHAOptimizer(pl.LightningModule):
         self.register_buffer("mouth_conditioning_max", torch.zeros(13) + 100)
 
     def on_train_start(self) -> None:
+        # JULES-20250730-14:26 中文注释：
+        # 缓存datamodule，因为在on_train_end中self.trainer.datamodule可能会被置为 None。
+        self.dm = self.trainer.datamodule
 
         # Copying config and body part weights to checkpoint dir
         logdir = Path(self.trainer.log_dir)
@@ -235,7 +240,8 @@ class NHAOptimizer(pl.LightningModule):
         # determining dynamic condition extrema for validation
         # JULES-20250726-2:30 中文注释：
         # 在 pytorch-lightning 1.9.5 版本中，应通过 `self.trainer.datamodule` 访问 dataloader。
-        self.get_dyn_cond_extrema(self.trainer.datamodule.train_dataloader().dataset.datasets)
+        # JULES-20250730,self.trainer.datamodule修改为实例self.dm。
+        self.get_dyn_cond_extrema(self.dm.train_dataloader().dataset.datasets)
 
     def _get_current_optimizer(self, epoch=None):
         if epoch is None:
