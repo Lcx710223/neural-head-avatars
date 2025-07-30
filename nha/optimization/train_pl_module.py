@@ -1,7 +1,8 @@
 ###JULES-20250726,修改第88行：原来的train_dataloader 修改为：train_dataloaders。
 ###JULES-20250727。修改38，85（新165行），93行（新175）。移除了对已弃用的add_argparse_args的调用，并相应地手动添加了参数；同时，更新了trainer.fit方法的参数，以适应新版本的 API。
 ###JULES-20250729，修改第20行，加入了：import pathlib torch.serialization.add_safe_globals([pathlib.PosixPath])
-###JULES-20250730,修改第200行。保存了STAGE_OPTIM.CKPT之后，再覆盖LAST.CKPT。JULES确认了原文CKPT保存逻辑有缺陷。原文只保存了一个特定于阶段的CKPT，然后错误地将检查点路径更新到last.ckpt而不实际创建文件。
+###JULES-20250730，修改152-164行：动态查找最新的检查点文件，以避免在新版本目录创建时出现 FileNotFoundError。
+###JULES-20250730，修改197-207行：将特定阶段的检查点复制为 last.ckpt，以确保下一阶段可以正确加载，同时保留原始的阶段检查点文件。在第14行增加import shutil。
 
 import json
 import time
@@ -12,6 +13,7 @@ from torch.utils.data import DataLoader
 from nha.evaluation.eval_suite import evaluate_models
 from nha.util.log import get_logger
 import os
+import shutil
 
 import pytorch_lightning as pl
 from pathlib import Path
@@ -149,7 +151,7 @@ def train_pl_module(optimizer_module, data_module, args=None):
     # init optimizer
     args_dict['max_frame_id'] = data.max_frame_id
 
-    # JULES-20250730-14:38 中文注释：
+    # JULES-20250729-14:38 中文注释：
     # 动态查找最新的检查点文件，以避免在新版本目录创建时出现 FileNotFoundError。
     log_root = Path(args_dict["default_root_dir"]) / "lightning_logs"
     if log_root.exists():
@@ -197,11 +199,12 @@ def train_pl_module(optimizer_module, data_module, args=None):
             stage_ckpt_path = Path(trainer.log_dir) / "checkpoints" / (stage + "_optim.ckpt")
             trainer.save_checkpoint(stage_ckpt_path)
             
-            # JULES-20250730-14:59 中文注释：
-            # 将特定阶段的检查点重命名为 last.ckpt，以确保下一阶段可以正确加载。
+            # JULES-20250730-00:44 中文注释：
+            # 将特定阶段的检查点复制为 last.ckpt，以确保下一阶段可以正确加载，
+            # 同时保留原始的阶段检查点文件。
             last_ckpt_path = Path(trainer.log_dir) / "checkpoints" / "last.ckpt"
-            # 使用 os.replace 来原子地重命名文件，如果 last.ckpt 已存在，则覆盖它。
-            os.replace(stage_ckpt_path, last_ckpt_path)
+            # 使用 shutil.copy 来复制文件。
+            shutil.copy(stage_ckpt_path, last_ckpt_path)
             
             args_dict["checkpoint_file"] = str(last_ckpt_path)
 
