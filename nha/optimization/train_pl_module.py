@@ -1,8 +1,6 @@
 ###JULES-20250726,修改第88行：原来的train_dataloader 修改为：train_dataloaders。
 ###JULES-20250727。修改38，85（新165行），93行（新175）。移除了对已弃用的add_argparse_args的调用，并相应地手动添加了参数；同时，更新了trainer.fit方法的参数，以适应新版本的 API。
 ###JULES-20250729，修改第20行，加入了：import pathlib torch.serialization.add_safe_globals([pathlib.PosixPath])
-###JULES-20250730，在155行增加代码，动态查找最新的检查点文件，以避免在新版本目录创建时出现 FileNotFoundError。
-###Jules-20250730，201行增加代码，将特定阶段的检查点重命名为 last.ckpt，以确保下一阶段可以正确加载。
 
 import json
 import time
@@ -150,19 +148,6 @@ def train_pl_module(optimizer_module, data_module, args=None):
     # init optimizer
     args_dict['max_frame_id'] = data.max_frame_id
 
-    # JULES-20250730-14:38 中文注释：
-    # 动态查找最新的检查点文件，以避免在新版本目录创建时出现 FileNotFoundError。
-    log_root = Path(args_dict["default_root_dir"]) / "lightning_logs"
-    if log_root.exists():
-        versions = sorted([d.name for d in log_root.iterdir() if d.is_dir() and d.name.startswith("version_")],
-                          key=lambda x: int(x.split('_')[1]), reverse=True)
-        if versions:
-            latest_version_dir = log_root / versions[0]
-            latest_ckpt = latest_version_dir / "checkpoints" / "last.ckpt"
-            if latest_ckpt.exists() and not args.checkpoint_file:
-                logger.info(f"Found latest checkpoint: {latest_ckpt}")
-                args_dict["checkpoint_file"] = str(latest_ckpt)
-
     if args.checkpoint_file:
         model = optimizer_module.load_from_checkpoint(args.checkpoint_file, strict=True, **args_dict)
     else:
@@ -195,16 +180,10 @@ def train_pl_module(optimizer_module, data_module, args=None):
                         val_dataloaders=data.val_dataloader(batch_size=data._val_batch[i]),
                         ckpt_path=ckpt_file)
 
-            stage_ckpt_path = Path(trainer.log_dir) / "checkpoints" / (stage + "_optim.ckpt")
-            trainer.save_checkpoint(stage_ckpt_path)
-            
-            # JULES-20250730-14:59 中文注释：
-            # 将特定阶段的检查点重命名为 last.ckpt，以确保下一阶段可以正确加载。
-            last_ckpt_path = Path(trainer.log_dir) / "checkpoints" / "last.ckpt"
-            # 使用 os.replace 来原子地重命名文件，如果 last.ckpt 已存在，则覆盖它。
-            os.replace(stage_ckpt_path, last_ckpt_path)
-            
-            args_dict["checkpoint_file"] = str(last_ckpt_path)
+            ckpt_path = Path(trainer.log_dir) / "checkpoints" / (stage + "_optim.ckpt")
+            trainer.save_checkpoint(ckpt_path)
+            ckpt_path = Path(trainer.log_dir) / "checkpoints" / "last.ckpt"
+            args_dict["checkpoint_file"] = ckpt_path
 
     # visualizations and evaluations
     proc_id = int(os.environ.get("SLURM_PROCID", 0))
