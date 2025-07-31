@@ -1,4 +1,6 @@
 ###JULES20250727，修改487行。移除了add_argpars_args类方法。
+###JULES20250731，修改413-416、438-440、504-517行共三处。原码有非标准的数据模块：RealDataModule的train_dataloader方法接受1个batch_size参数，
+###这不符合PyTorch Lightning的标准。标准的DataModule应该在内部管理自己的配置（比如批处理大小），并提供一个无参数的train_dataloader()方法。
 
 from nha.util.log import get_logger
 from nha.util.general import get_mask_bbox
@@ -408,8 +410,12 @@ class RealDataModule(pl.LightningDataModule):
         """
         super().__init__()
         self._path = Path(data_path)
-        self._train_batch = train_batch_size
-        self._val_batch = validation_batch_size
+        # JULES-20250731: 将包含各阶段批处理大小的列表保存在内部，而不是单个值
+        self._train_batch_sizes = train_batch_size
+        self._val_batch_sizes = validation_batch_size
+        # JULES-20250731: 初始化当前阶段的批处理大小，默认为第一阶段
+        self.current_train_batch_size = self._train_batch_sizes[0]
+        self.current_val_batch_size = self._val_batch_sizes[0]
         self._workers = data_worker
         self._tracking_results_path = tracking_results_path
         self._tracking_resolution = tracking_resolution
@@ -428,6 +434,11 @@ class RealDataModule(pl.LightningDataModule):
             load_light=load_light,
             load_parsing=load_parsing,
         )
+
+    # JULES2025-0731: 新增方法，用于根据训练阶段（stage）的索引来切换对应的批处理大小
+    def set_stage(self, stage_index):
+        self.current_train_batch_size = self._train_batch_sizes[stage_index]
+        self.current_val_batch_size = self._val_batch_sizes[stage_index]
 
     def setup(self, stage=None):
         train_split, val_split = self._read_splits(self._split_config)
@@ -490,18 +501,22 @@ class RealDataModule(pl.LightningDataModule):
     # `add_argparse_args` 类方法在 pytorch-lightning 1.9.5 版本中已被弃用。
     # 我们将其移除，并已在 `train_pl_module.py` 中手动添加了相关参数。
 
-    def train_dataloader(self, batch_size):
+    # JULES-20250731: 修改方法签名，使其符合PyTorch Lightning标准，不再需要外部传入batch_size
+    def train_dataloader(self):
         return DataLoader(
             self._train_set,
-            batch_size=batch_size,
+            # JULES: 使用内部保存的、根据阶段动态更新的批处理大小
+            batch_size=self.current_train_batch_size,
             shuffle=True,
             num_workers=self._workers,
         )
 
-    def val_dataloader(self, batch_size):
+    # JULES-20250731: 修改方法签名，使其符合PyTorch Lightning标准，不再需要外部传入batch_size
+    def val_dataloader(self):
         return DataLoader(
             self._val_set,
-            batch_size=batch_size,
+            # JULES: 使用内部保存的、根据阶段动态更新的批处理大小
+            batch_size=self.current_val_batch_size,
             shuffle=False,
             num_workers=self._workers,
         )
