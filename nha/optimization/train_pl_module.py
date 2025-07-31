@@ -3,6 +3,7 @@
 ###JULES-20250729，修改第20行，加入了：import pathlib torch.serialization.add_safe_globals([pathlib.PosixPath])
 ###JULES-20250730，修改152-164行：动态查找最新的检查点文件，以避免在新版本目录创建时出现 FileNotFoundError。
 ###JULES-20250730，修改197-207行：将特定阶段的检查点复制为 last.ckpt，以确保下一阶段可以正确加载，同时保留原始的阶段检查点文件。在第14行增加import shutil。
+###JULES-20250731，修改187、197两处：更新训练流程。进入每个训练阶段的循环时首先调用data.set_stage(i)来更新DataModule的状态。然后修改trainer.fit()调用，直接传递整个data对象（datamodule=data）。Trainer完全接管数据流，并正确地将DataModule的引用传递给NHAOptimizer。
 
 import json
 import time
@@ -183,6 +184,8 @@ def train_pl_module(optimizer_module, data_module, args=None):
             logger.info(f"Running the {stage}-optimization stage.")
 
             ckpt_file = args_dict["checkpoint_file"] if args_dict["checkpoint_file"] else None
+            # JULES-20250731: 在开始本阶段训练前，设置好DataModule对应的批处理大小
+            data.set_stage(i)
             trainer = pl.Trainer.from_argparse_args(args, callbacks=model.callbacks,
                                                     max_epochs=stage_jumps[i],
                                                     logger=experiment_logger)
@@ -191,9 +194,10 @@ def train_pl_module(optimizer_module, data_module, args=None):
             # 在 pytorch-lightning 1.9.5 版本中，`resume_from_checkpoint` 参数已从 `Trainer` 的构造函数中移除，
             # 并移至 `fit` 方法的 `ckpt_path` 参数。同时，`train_dataloader` 和 `val_dataloader`
             # 已分别重命名为 `train_dataloaders` 和 `val_dataloaders`。
+            # JULES-20250731: 将整个DataModule传给fit方法，而不是单独的Dataloader。
+            # 这样Trainer才能正确感知和管理DataModule，从而避免on_train_end中的AttributeError。
             trainer.fit(model,
-                        train_dataloaders=data.train_dataloader(batch_size=data._train_batch[i]),
-                        val_dataloaders=data.val_dataloader(batch_size=data._val_batch[i]),
+                        datamodule=data,
                         ckpt_path=ckpt_file)
 
             stage_ckpt_path = Path(trainer.log_dir) / "checkpoints" / (stage + "_optim.ckpt")
