@@ -1,6 +1,6 @@
 ###JULES20250727，修改487行。移除了add_argpars_args类方法。
-###JULES20250731，修改413-416、438-440、504-517行共三处。原码有非标准的数据模块：RealDataModule的train_dataloader方法接受1个batch_size参数，
-###这不符合PyTorch Lightning的标准。标准的DataModule应该在内部管理自己的配置（比如批处理大小），并提供一个无参数的train_dataloader()方法。
+###JULES20250731，修改413-416、438-440、504-517行共三处。原码有非标准的数据模块：RealDataModule的train_dataloader方法接受1个batch_size参数，这不符合PyTorch Lightning的标准。标准的DataModule应该在内部管理自己的配置（比如批处理大小），并提供无参数的train_dataloader()方法。
+###JULES重构了RealDataModule，使能够在其内部管理不同训练阶段（offset, texture, joint）的批处理大小。添加了一个set_stage方法，用于在不同阶段切换批处理大小。同时，修改了train_dataloader和val_dataloader方法，移除了batch_size参数，使其从模块自身获取当前的批处理大小。
 
 from nha.util.log import get_logger
 from nha.util.general import get_mask_bbox
