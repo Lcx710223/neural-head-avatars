@@ -3,6 +3,7 @@
 ###JULES-20250728-4:00 修改711行，把张量和指针放置在同一设备上。原代码是分置了模型和指针。
 ###JULES-20250730,238行，修改了on_train_end方法，用self.dm代替self.trainer.datamodule.
 ###JULES-20250730,187行，修改on_train_start方法。缓存datamodule因为在on_train_end中self.trainer.datamodule可能会被置为 None。
+###JULES-20250731，修改244、752两处。在on_train_end中原来的代码dataset.datasets是不正确的，因为RealDataset没有.datasets属性，修正为dataset以正确获取数据集对象。修复了get_dyn_cond_extrema方法内部参数逻辑（752）。
 
 from nha.models.texture import MultiTexture
 from nha.models.flame import *
@@ -241,7 +242,8 @@ class NHAOptimizer(pl.LightningModule):
         # JULES-20250726-2:30 中文注释：
         # 在 pytorch-lightning 1.9.5 版本中，应通过 `self.trainer.datamodule` 访问 dataloader。
         # JULES-20250730,self.trainer.datamodule修改为实例self.dm。
-        self.get_dyn_cond_extrema(self.dm.train_dataloader().dataset.datasets)
+        # JULES-20250731: 修复了数据集的访问方式，移除了多余且不正确的.datasets属性
+        self.get_dyn_cond_extrema(self.dm.train_dataloader().dataset)
 
     def _get_current_optimizer(self, epoch=None):
         if epoch is None:
@@ -748,7 +750,8 @@ class NHAOptimizer(pl.LightningModule):
 
     @torch.no_grad()
     def get_dyn_cond_extrema(self, dataset=None):
-        dataset = dataset if dataset is not None else self.trainer.train_dataloader.dataset.datasets
+        # JULES-20250731: 修复了此方法内部的默认逻辑，使其能正确从self.dm获取数据集
+        dataset = dataset if dataset is not None else self.dm.train_dataloader().dataset
 
         dataloader = DataLoader(dataset, batch_size=48, num_workers=4)
 
