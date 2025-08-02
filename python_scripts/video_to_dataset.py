@@ -1,4 +1,4 @@
-###LCX20250802,修改382行：LandmarksType._3D, device="cuda"。
+###LCX20250802,修改382行：LandmarksType._3D。
 
 from nha.util.log import get_logger
 from nha.data.real import RealDataset, CLASS_IDCS, frame2id, SEGMENTATION_LABELS
@@ -379,7 +379,7 @@ class Video2DatasetConverter:
         """
         # 68 facial landmark detector
         fa = face_alignment.FaceAlignment(
-            face_alignment.LandmarksType.THREE_D, flip_input=True, device="cpu"   ###LCX20250802,face_alignment.LandmarksType._3D, flip_input=True, device="cuda"
+            face_alignment.LandmarksType.THREE_D, flip_input=True, device="cuda"   ###LCX20250802,face_alignment.LandmarksType._3D, flip_input=True, device="cuda"
         )
         frames = self._get_frame_list()
         landmarks = {}
