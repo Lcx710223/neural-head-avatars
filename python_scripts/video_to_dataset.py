@@ -377,9 +377,9 @@ class Video2DatasetConverter:
         Annotates each frame with 68 facial landmarks
         :return: dict mapping frame number to landmarks numpy array and the same thing for bboxes
         """
-        # 68 facial landmark detector
+        # 68 facial landmark detector。LCX20250802,face_alignment.LandmarksType._3D, flip_input=True, device="cuda"。
         fa = face_alignment.FaceAlignment(
-            face_alignment.LandmarksType.THREE_D, flip_input=True, device="cuda"   ###LCX20250802,face_alignment.LandmarksType._3D, flip_input=True, device="cuda"
+            face_alignment.LandmarksType.THREE_D, flip_input=True, device="cuda"
         )
         frames = self._get_frame_list()
         landmarks = {}
