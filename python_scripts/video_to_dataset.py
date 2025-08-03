@@ -1,4 +1,4 @@
-###LCX20250802,修改382行：LandmarksType._3D。
+###LCX20250802,修改382行：LandmarksType._3D。JULES20250803修改375行，_annotate_facial_landmarks(self):函数，避免没有检测到脸或者LM系统中断，提出警告后继续，以保持连续帧号。
 
 from nha.util.log import get_logger
 from nha.data.real import RealDataset, CLASS_IDCS, frame2id, SEGMENTATION_LABELS
