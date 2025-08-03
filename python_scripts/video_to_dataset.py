@@ -391,17 +391,22 @@ class Video2DatasetConverter:
             img = np.array(Image.open(frame))
             bbox = fa.face_detector.detect_from_image(img)
 
+            # JULES20250803: 如果在此帧中未检测到人脸，则记录一条警告并跳过此帧，而不是让程序崩溃
             if len(bbox) == 0:
-                # if no faces detected, something is weird and
-                # one shouldnt use the image
-                raise RuntimeError(f"Error: No bounding box found for {frame}!")
+                logger.warning(f"No face detected for frame {frame_id}, skipping.")
+                continue
+        
+            if len(bbox) > 1:
+                # if multiple boxes detected, use the one with highest confidence
+                bbox = [bbox[np.argmax(np.array(bbox)[:, -1])]]
 
+            # JULES20250803: 如果无法获取关键点，则记录一条警告并跳过此帧
+            preds = fa.get_landmarks_from_image(img, detected_faces=bbox)
+            if preds is None:
+                logger.warning(f"Could not get landmarks for frame {frame_id}, skipping.")
+                continue
             else:
-                if len(bbox) > 1:
-                    # if multiple boxes detected, use the one with highest confidence
-                    bbox = [bbox[np.argmax(np.array(bbox)[:, -1])]]
-
-                lmks = fa.get_landmarks_from_image(img, detected_faces=bbox)[0]
+                lmks = preds[0]
 
             landmarks[frame_id] = lmks
             bboxes[frame_id] = bbox[0]
