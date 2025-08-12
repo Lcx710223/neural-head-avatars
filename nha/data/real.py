@@ -1,6 +1,7 @@
 ###JULES20250727，修改487行。移除了add_argpars_args类方法。
 ###JULES20250731，修改413-416、438-440、504-517行共三处。原码有非标准的数据模块：RealDataModule的train_dataloader方法接受1个batch_size参数，这不符合PyTorch Lightning的标准。标准的DataModule应该在内部管理自己的配置（比如批处理大小），并提供无参数的train_dataloader()方法。
 ###JULES重构了RealDataModule，使能够在其内部管理不同训练阶段（offset, texture, joint）的批处理大小。添加了一个set_stage方法，用于在不同阶段切换批处理大小。同时，修改了train_dataloader和val_dataloader方法，移除了batch_size参数，使其从模块自身获取当前的批处理大小。
+###JULES20250812,修改了训练集和验证集的长度计算方法，使LOGS在显示进度时更准确。先去检查split.json和tracked_flame_params.npz文件，只加载同时存在于这两个文件中的帧。NPZ没有跟踪到FLAME数据的坏帧明确的截掉，并在LOG里显示准确的BATCHSIZE长度。
 
 from nha.util.log import get_logger
 from nha.util.general import get_mask_bbox
@@ -141,12 +142,13 @@ class RealDataset(Dataset):
 
         self._views = []
 
-        self._load(frame_filter)
+        # JULES-20250812: 先加载跟踪结果，以便_load方法可以使用它来过滤帧
         self._tracking_results = (
             dict(np.load(tracking_results_path))
             if tracking_results_path is not None
             else None
         )
+        self._load(frame_filter)
         self._tracking_resolution = tracking_resolution
 
         if self._tracking_resolution is None and self._tracking_results is not None:
@@ -155,36 +157,53 @@ class RealDataset(Dataset):
 
         self._views = sorted(self._views, key=lambda x: frame2id(x.parent.name))
 
-        self.max_frame_id = max([frame2id(x.parent.name) for x in self._views])
+        # JULES-20250812: 增加对_views列表是否为空的检查，避免在空列表上调用max()导致错误
+        self.max_frame_id = max([frame2id(x.parent.name) for x in self._views]) if self._views else 0
 
     def _load(self, frame_filter):
         """
+        JULES-20250812: 重构此方法以确保数据集的准确性。
+        现在，它只加载同时存在于 `frame_filter`（来自split.json）和跟踪结果文件中的帧。
+        这可以防止数据集大小出现不匹配的问题。
+
         Loads the dataset from location self._path.
-        The results are stored in the respective member
-        variables.
+        It only loads views for frames that are both in the `frame_filter`
+        and have corresponding tracking results.
         """
-
-        # Obtain frame folders
+        # Start with all frames from the split configuration
         if frame_filter is None:
-            frames = [f for f in os.listdir(self._path) if f.startswith("frame_")]
+            # This case is not used in the optimization script, but as a fallback
+            all_frame_folders = [f for f in os.listdir(self._path) if f.startswith("frame_")]
+            frame_ids_to_consider = {frame2id(f) for f in all_frame_folders}
         else:
-            frames = [f"frame_{f:04d}" for f in frame_filter]
+            frame_ids_to_consider = set(frame_filter)
 
-        for f in frames:
-            self._views.append(self._path / f / "image_0000.png")
+        # If tracking results are provided, find the intersection of frames
+        if self._tracking_results is not None and "frame" in self._tracking_results:
+            tracked_frame_ids = set(self._tracking_results["frame"])
+            valid_frame_ids = frame_ids_to_consider.intersection(tracked_frame_ids)
+        else:
+            # If no tracking, just use the frames from the split
+            valid_frame_ids = frame_ids_to_consider
 
-        if (
-            frame_filter is not None
-        ):  # Attention: DOES NOT CHECK FRAMES FOR EACH SUBJECT INDIVIDUALLY!
-            for f in frame_filter:
-                if f not in self.frame_list:
-                    raise FileNotFoundError(f"Couldn't find specified frame {f}")
+        # Create view paths for the valid, sorted frames
+        for f_id in sorted(list(valid_frame_ids)):
+            frame_name = f"frame_{f_id:04d}"
+            view_path = self._path / frame_name / "image_0000.png"
+            # Final check if the image file actually exists
+            if view_path.exists():
+                self._views.append(view_path)
+            else:
+                logger.warning(f"View path {view_path} not found for valid frame {f_id}, skipping.")
+
+        if not self._views:
+            logger.warning("No views were loaded. The dataset is empty. Check `split_config` and `tracking_results_path`.")
 
     def __len__(self):
-        if self._tracking_results is None:
-            return len(self._views)
-        else:
-            return min(len(self._views), len(self._tracking_results["expr"]))
+        # JULES-20250812: 简化__len__方法。
+        # 由于_load方法已经确保_views列表只包含有效的、经过筛选的帧，
+        # 所以现在可以直接返回其长度。
+        return len(self._views)
 
     def _get_eye_info(self, sample):
         if not sample["frame"] in self._eye_info_cache:
